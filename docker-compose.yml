@@ -15,7 +15,7 @@ services:
       - MONGO_URI=mongodb://mongo:27017/VidyaAI-Chat
       - REDIS_URL=redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "8001:8001"
     networks:
       - backend
     restart: unless-stopped
