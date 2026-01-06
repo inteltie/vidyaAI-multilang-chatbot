@@ -1,0 +1,20 @@
+[project]
+name = "vidyaai-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "redis>=5.0.0",
+    "pinecone-text",
+    "pinecone",
+    "beanie",
+    "motor",
+    "python-dotenv>=1.2.1",
+    "git-filter-repo>=2.47.0",
+]

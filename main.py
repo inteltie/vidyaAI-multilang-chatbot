@@ -1,0 +1,328 @@
+"""FastAPI application entrypoint for the educational chatbot."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import Any, Dict
+
+import redis.asyncio as aioredis
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_openai import ChatOpenAI
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
+
+from graph import ChatbotGraphBuilder
+from models import ChatRequest, ChatResponse, ErrorResponse, QueryIntent
+from models import ChatSession
+from nodes import (
+    AnalyzeQueryNode,
+    LoadMemoryNode,
+    ParseSessionContextNode,
+    SaveMemoryNode,
+    TranslateResponseNode,
+    GroundednessCheckNode,
+)
+from services import (
+    ContextParser,
+    MemoryService,
+    QueryClassifier,
+    RetrieverService,
+    Translator,
+    CitationService,
+    ResponseValidator,
+)
+from state import AgentState
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class BackendApp:
+    """Application factory that wires services, graph, and FastAPI routes."""
+
+    def __init__(self) -> None:
+        # Settings are loaded from environment variables
+        self._settings = settings
+        self._redis_client: aioredis.Redis | None = None
+        self._graph = None
+        self._configure_logging()
+        # Build app with lifespan
+        self._app = self._build_app()
+        self._configure_routes()
+
+    @property
+    def app(self) -> FastAPI:
+        """Expose the underlying FastAPI app."""
+        return self._app
+
+    def _configure_logging(self) -> None:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        )
+
+    def _build_app(self) -> FastAPI:
+        """Build FastAPI app with lifespan context manager."""
+        
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            """Lifespan context manager for startup and shutdown."""
+            # Startup
+            logger.info("Starting up application...")
+            
+            # Redis initialization
+            self._redis_client = aioredis.from_url(
+                self._settings.redis_url,
+                decode_responses=True,
+            )
+            
+            # MongoDB initialization
+            try:
+                client = AsyncIOMotorClient(self._settings.mongo_uri)
+                await init_beanie(
+                    database=client[self._settings.mongo_db_name],
+                    document_models=[ChatSession]
+                )
+                logger.info("MongoDB connected and Beanie initialized.")
+            except Exception as e:
+                logger.error(f"Failed to initialize MongoDB: {e}")
+                raise
+
+            self._graph = self._build_graph()
+            logger.info("LangGraph compiled and application started.")
+            
+            yield
+            
+            # Shutdown
+            logger.info("Shutting down application...")
+            if self._redis_client:
+                await self._redis_client.aclose()
+            logger.info("Redis client closed.")
+        
+        app = FastAPI(
+            title="VidyaAI Educational Chatbot",
+            version="0.1.0",
+            lifespan=lifespan,
+        )
+        
+        # Add CORS middleware to allow cross-origin requests
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # Allow all origins - restrict in production
+            allow_credentials=True,
+            allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+            allow_headers=["*"],  # Allow all headers
+        )
+        
+        return app
+
+    def _build_graph(self):
+        """Builds and compiles the LangGraph."""
+        # Shared LLM client (deterministic responses with temperature 0.0)
+        llm = ChatOpenAI(
+            model=self._settings.model_name,
+            api_key=self._settings.openai_api_key,
+            temperature=0.0,
+            max_tokens=self._settings.max_tokens_default,  # Default token limit
+        )
+        
+        # LLM for validation (can be a different model or settings)
+        llm_4o = ChatOpenAI(
+            model="gpt-4o",
+            api_key=self._settings.openai_api_key,
+            temperature=0.0,
+            max_tokens=self._settings.max_tokens_default,
+        )
+
+        # Services
+        # self._redis_client is guaranteed to be not None here due to lifespan
+        memory_service = MemoryService(self._redis_client, llm)
+        
+        # fastText-based language detector (no LLM calls)
+        # language_detector = LanguageDetector()
+        translator = Translator(llm)
+        context_parser = ContextParser(llm)
+        # intent_classifier removed as it was unused
+        retriever_service = RetrieverService(self._settings)
+        citation_service = CitationService()
+        response_validator = ResponseValidator(llm_4o)
+
+        
+        # Agent services
+        from agents import ConversationalAgent, StudentAgent, TeacherAgent, InteractiveStudentAgent
+        
+        query_classifier = QueryClassifier(llm)
+        conversational_agent = ConversationalAgent(llm)
+        
+        # Student and Teacher agents with ReAct reasoning
+        student_agent = StudentAgent(
+            llm, 
+            retriever_service, 
+            max_iterations=settings.max_iterations,
+            enable_web_search=settings.web_search_enabled
+        )
+        interactive_student_agent = InteractiveStudentAgent(
+            llm, 
+            retriever_service, 
+            max_iterations=settings.max_iterations,
+            enable_web_search=settings.web_search_enabled
+        )
+        teacher_agent = TeacherAgent(llm, retriever_service, max_iterations=settings.max_iterations)
+
+        # Nodes
+        load_memory_node = LoadMemoryNode(memory_service)
+        parse_session_context_node = ParseSessionContextNode(context_parser)
+        
+        # Agent nodes
+        from nodes import (
+            ConversationalAgentNode,
+            StudentAgentNode,
+            InteractiveStudentAgentNode,
+            TeacherAgentNode,
+        )
+        
+        analyze_query_node = AnalyzeQueryNode(query_classifier, retriever_service)
+        conversational_agent_node = ConversationalAgentNode(conversational_agent)
+        student_agent_node = StudentAgentNode(student_agent)
+        interactive_student_agent_node = InteractiveStudentAgentNode(interactive_student_agent)
+        teacher_agent_node = TeacherAgentNode(teacher_agent)
+        groundedness_check_node = GroundednessCheckNode(response_validator)
+        translate_response_node = TranslateResponseNode(translator)
+        save_memory_node = SaveMemoryNode(memory_service)
+
+        builder = ChatbotGraphBuilder(
+            load_memory=load_memory_node,
+            parse_session_context=parse_session_context_node,
+            analyze_query=analyze_query_node,
+            conversational_agent=conversational_agent_node,
+            student_agent=student_agent_node,
+            interactive_student_agent=interactive_student_agent_node,
+            teacher_agent=teacher_agent_node,
+            groundedness_check=groundedness_check_node,
+            translate_response=translate_response_node,
+            save_memory=save_memory_node,
+        )
+        return builder.compile()
+
+    def _get_graph(self):
+        if self._graph is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Graph not ready yet.",
+            )
+        return self._graph
+
+    def _configure_routes(self) -> None:
+        @self._app.get("/health")
+        async def health() -> Dict[str, Any]:
+            redis_ok = False
+            try:
+                if self._redis_client is not None:
+                    await self._redis_client.ping()
+                    redis_ok = True
+            except Exception:
+                redis_ok = False
+            return {"status": "ok", "redis": redis_ok}
+
+        @self._app.post(
+            "/chat",
+            response_model=ChatResponse,
+            responses={500: {"model": ErrorResponse}},
+        )
+        async def chat_endpoint(request: ChatRequest, graph=Depends(self._get_graph))  -> ChatResponse:
+            try:
+                # Initialize state
+                state: AgentState = {
+                    "query": request.query,
+                    "user_id": request.user_id,
+                    "user_session_id": request.user_session_id,
+                    "user_type": request.user_type,
+                    "language": request.language,
+                    "agent_mode": request.agent_mode or "standard",
+                    "conversation_history": [],
+                    "session_metadata": {},
+                    "query_en": "",
+                    "detected_language": request.language,  # Initialize with request language
+                    "intent": QueryIntent.CONCEPT_EXPLANATION,
+                    "is_context_reply": False,
+                    "is_topic_shift": False,
+                    "is_acknowledgment": False,
+                    "query_type": "curriculum_specific",
+                    "response": "",
+                    "citations": [],
+                    "llm_calls": 0,
+                    "timings": {},
+                }
+                
+                # Store UI filters separately (only for RAG retrieval)
+                state["request_filters"] = request.filters.copy() if request.filters else {}
+                if request.filters:
+                    logger.info("Captured UI-provided filters: %s", request.filters)
+
+                # Add timeout to prevent indefinite blocking
+                final_state: AgentState = await asyncio.wait_for(
+                    graph.ainvoke(state), # Use the new 'state' variable
+                    timeout=60.0  # 60 second timeout
+                )
+            except asyncio.TimeoutError:               
+                logger.error("Graph execution timed out after 60 seconds")
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail="Request timed out. Please try again.",
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Graph execution failed: %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An internal error occurred while processing the request.",
+                ) from exc
+
+            message = final_state.get("response", "")
+            intent = final_state.get("intent", QueryIntent.CONCEPT_EXPLANATION).value
+            language = final_state.get(
+                "final_language", final_state.get("detected_language", request.language)
+            )
+            citations = final_state.get("citations", []) or []
+            timings = final_state.get("timings", {}) or {}
+            llm_calls = int(final_state.get("llm_calls", 0) or 0)
+
+            # Log per-step timings to the server log (visible in terminal), not in the API payload.
+            for step, duration in sorted(timings.items()):
+                logger.info("timing step=%s duration=%.3fs", step, duration)
+
+            # Append human-readable citation summary to the message body (if any).
+            lecture_ids = sorted(
+                {c.get("lecture_id") for c in citations if c.get("lecture_id")}
+            )
+            if lecture_ids:
+                session_str = ", ".join(str(sid) for sid in lecture_ids)
+                if message:
+                    message = f"{message}\n\n---\nSources (lecture_id): {session_str}"
+                else:
+                    message = f"Sources (lecture_id): {session_str}"
+
+
+            return ChatResponse(
+                user_session_id=request.user_session_id,
+                message=message,
+                intent=intent,
+                language=language,
+                citations=citations,
+                llm_calls=llm_calls,
+            )
+            
+
+
+backend = BackendApp()
+app = backend.app
+
+
+if __name__ == "__main__":  # pragma: no cover - manual run helper
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+
