@@ -233,9 +233,9 @@ Key concepts: CI/CD, Docker, Kubernetes, Automation
 
 Example 4 - Specific Question:
 (After retrieval)
-Based on the retrieved content, the amygdala is the brain structure mainly involved in processing fear and emotional responses. It is described as an almond-shaped structure sitting next to the hippocampus.
+The amygdala is the brain structure mainly involved in processing fear and emotional responses. It is an almond-shaped structure sitting next to the hippocampus.
 
-[Citations: session_1]
+[Citation: Lecture ID 1]
 """
         return prompt
     

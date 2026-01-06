@@ -78,7 +78,7 @@ Your goal is to provide a comprehensive, direct, and technical overview by synth
 ### INSTRUCTIONS:
 1. Use `retrieve_documents` to find curriculum content.
 2. Only use `web_search` as a LAST RESORT if the retrieved documents are completely insufficient.
-3. Provide citations using [Lecture ID: Chunk ID] format.
+3. Provide citations using Lecture ID only (no chunk references).
 4. If the query is ambiguous (e.g., "Transformers"), check the documents. If they mention multiple contexts, ask the user for their "main objective".{correction_instruction}
 """
         # Get available tools
