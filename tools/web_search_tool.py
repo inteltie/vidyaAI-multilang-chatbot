@@ -67,20 +67,20 @@ class WebSearchTool(Tool):
                     {
                         "role": "system",
                         "content": (
-                            "You are a helpful research assistant. "
-                            "Search your knowledge for the most accurate and current information. "
-                            "Provide factual, well-organized results. "
+                            "You are a concise research assistant. "
+                            "Provide a brief, factual summary of the most relevant information. "
+                            "Avoid conversational filler. "
                             "CRITICAL: Always include any URLs or sources found. "
-                            "Format sources as [Source: URL or Name] at the end of relevant points."
+                            "Format sources as [Source: URL or Name] at the end."
                         )
                     },
                     {
                         "role": "user", 
-                        "content": f"Search and provide information about: {query}"
+                        "content": f"Briefly summarize: {query}"
                     }
                 ],
-                max_tokens=600,
-                temperature=0.3,
+                max_tokens=300,
+                temperature=0.0,
             )
             
             result = response.choices[0].message.content

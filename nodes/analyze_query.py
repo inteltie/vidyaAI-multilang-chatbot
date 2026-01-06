@@ -56,6 +56,26 @@ class AnalyzeQueryNode:
         state["query_type"] = result.query_type
         state["subjects"] = result.subjects
         
+        # Phase 1 Optimization: Merged session metadata extraction
+        if result.query_type != "conversational":
+            if "session_metadata" not in state:
+                state["session_metadata"] = {}
+                
+            # Merge extracted values as fallbacks (UI/existing session data takes precedence)
+            meta = state["session_metadata"]
+            if not meta.get("class_level") and result.class_level:
+                meta["class_level"] = result.class_level
+                logger.info("Extracted class_level: %s", result.class_level)
+            if not meta.get("subject") and result.extracted_subject:
+                meta["subject"] = result.extracted_subject
+                logger.info("Extracted subject: %s", result.extracted_subject)
+            if not meta.get("topics") and result.chapter:
+                meta["topics"] = result.chapter # Mapping chapter to topics for DB consistency
+                logger.info("Extracted topics (chapter): %s", result.chapter)
+            if not meta.get("lecture_id") and result.lecture_id:
+                meta["lecture_id"] = result.lecture_id
+                logger.info("Extracted lecture_id: %s", result.lecture_id)
+        
         # Proactive RAG (Optimization for speed)
         state["prefilled_observations"] = []
         if result.query_type == "curriculum_specific" and self._retriever:
@@ -92,8 +112,24 @@ class AnalyzeQueryNode:
                                 len(docs), state["rag_quality"], top_score)
                 else:
                     state["rag_quality"] = "low"
+                    
+                # PROACTIVE WEB SEARCH: If quality is low or external cues detected
+                if state.get("rag_quality") == "low" or any(w in query.lower() for w in ["latest", "recent", "news", "current"]):
+                    logger.info("Triggering proactive web search...")
+                    from tools.web_search_tool import WebSearchTool
+                    # We use a shared instance if possible, but for node simplicity we can instantiate
+                    # Note: In production, consider inject this tool
+                    web_tool = WebSearchTool()
+                    web_results = await web_tool.execute(query=result.translated_query)
+                    state["prefilled_observations"].append({
+                        "tool": "web_search",
+                        "args": {"query": result.translated_query},
+                        "observation": web_results
+                    })
+                    logger.info("Proactive web search completed.")
+
             except Exception as e:
-                logger.error("Proactive RAG fetch failed: %s", e)
+                logger.error("Proactive fetch failed: %s", e)
                 state["rag_quality"] = "low"
         
         # Track LLM call (1 call)

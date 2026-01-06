@@ -57,9 +57,9 @@ class StudentAgent:
         rag_quality = (state or {}).get("rag_quality", "low")
         efficiency_instruction = ""
         if rag_quality == "high":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents were found. Prioritize them. Only use web search if these specific documents do not contain the answer."
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are already provided in your context. Answer IMMEDIATELY and DIRECTLY using these documents. Only use web search if they do not contain the answer. Do NOT call 'retrieve_documents' again."
         elif rag_quality == "medium":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Good curriculum documents are available. Use them as your primary source."
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Good curriculum documents are available in context. Use them as your primary source."
         
         # CORRECTION FEEDBACK
         correction_instruction = ""

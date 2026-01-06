@@ -119,6 +119,7 @@ class RetrievalTool(Tool):
             result += f"{i}. [Score: {doc.get('score', 0):.2f}]\n"
             result += f"   Lecture ID: {metadata.get('lecture_id', 'N/A')}\n"
             result += f"   Transcript ID: {metadata.get('transcript_id', 'N/A')}\n"
+            result += f"   Chunk ID: {metadata.get('chunk_id', 'N/A')}\n"
             result += f"   Chapter: {metadata.get('chapter', 'N/A')}\n"
             result += f"   Subject: {metadata.get('subject', 'N/A')}\n"
             result += f"   Subject ID: {metadata.get('subject_id', 'N/A')}\n"

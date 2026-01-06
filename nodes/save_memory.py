@@ -37,4 +37,7 @@ class SaveMemoryNode:
         duration = perf_counter() - start
         timings = state.get("timings") or {}
         timings["save_memory"] = duration
+        state["timings"] = timings
+        return state
+
 

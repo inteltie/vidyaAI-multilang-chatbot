@@ -44,6 +44,7 @@ class TeacherAgent:
             llm=llm,
             tool_registry=self.tool_registry,
             max_iterations=max_iterations,
+            enforce_sequential=False,
         )
     
     def _register_teacher_tools(self):
@@ -147,7 +148,9 @@ class TeacherAgent:
         rag_quality = (state or {}).get("rag_quality", "low")
         efficiency_instruction = ""
         if rag_quality == "high":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are available. Use them strictly."
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are already provided in your context. Answer IMMEDIATELY and DIRECTLY using these documents. Do NOT call 'retrieve_documents' again unless they are insufficient."
+        elif rag_quality == "medium":
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Good curriculum documents are available in context. Use them as your primary source."
 
         # CORRECTION FEEDBACK
         correction_instruction = ""

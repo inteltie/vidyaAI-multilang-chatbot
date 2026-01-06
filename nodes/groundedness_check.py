@@ -16,16 +16,27 @@ class GroundednessCheckNode:
         self._validator = validator
 
     async def __call__(self, state: AgentState) -> AgentState:
+        from time import perf_counter
+        start = perf_counter()
+        
         # Skip validation if response is a fallback or conversational
         query_type = state.get("query_type")
         response = state.get("response")
         
         if query_type == "conversational" or not response:
+            duration = perf_counter() - start
+            timings = state.get("timings") or {}
+            timings["groundedness_check"] = duration
+            state["timings"] = timings
             return state
 
         # Don't loop infinitely - limit to 1 correction
         if state.get("is_correction"):
             logger.info("Skipping validation for correction turn to prevent infinite loops.")
+            duration = perf_counter() - start
+            timings = state.get("timings") or {}
+            timings["groundedness_check"] = duration
+            state["timings"] = timings
             return state
 
         docs = state.get("documents", [])
@@ -54,4 +65,9 @@ class GroundednessCheckNode:
         else:
             logger.info("Response validated successfully.")
 
+        duration = perf_counter() - start
+        timings = state.get("timings") or {}
+        timings["groundedness_check"] = duration
+        state["timings"] = timings
+        
         return state

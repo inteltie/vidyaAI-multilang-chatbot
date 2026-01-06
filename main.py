@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from time import perf_counter
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -130,9 +131,9 @@ class BackendApp:
             max_tokens=self._settings.max_tokens_default,  # Default token limit
         )
         
-        # LLM for validation (can be a different model or settings)
-        llm_4o = ChatOpenAI(
-            model="gpt-4o",
+        # LLM for validation (Fast and efficient for groundedness checks)
+        llm_fast = ChatOpenAI(
+            model="gpt-4o-mini",
             api_key=self._settings.openai_api_key,
             temperature=0.0,
             max_tokens=self._settings.max_tokens_default,
@@ -149,7 +150,7 @@ class BackendApp:
         # intent_classifier removed as it was unused
         retriever_service = RetrieverService(self._settings)
         citation_service = CitationService()
-        response_validator = ResponseValidator(llm_4o)
+        response_validator = ResponseValidator(llm_fast)
 
         
         # Agent services
@@ -175,7 +176,6 @@ class BackendApp:
 
         # Nodes
         load_memory_node = LoadMemoryNode(memory_service)
-        parse_session_context_node = ParseSessionContextNode(context_parser)
         
         # Agent nodes
         from nodes import (
@@ -196,7 +196,6 @@ class BackendApp:
 
         builder = ChatbotGraphBuilder(
             load_memory=load_memory_node,
-            parse_session_context=parse_session_context_node,
             analyze_query=analyze_query_node,
             conversational_agent=conversational_agent_node,
             student_agent=student_agent_node,
@@ -264,10 +263,15 @@ class BackendApp:
                     logger.info("Captured UI-provided filters: %s", request.filters)
 
                 # Add timeout to prevent indefinite blocking
+                graph_start = perf_counter()
                 final_state: AgentState = await asyncio.wait_for(
                     graph.ainvoke(state), # Use the new 'state' variable
                     timeout=60.0  # 60 second timeout
                 )
+                graph_duration = perf_counter() - graph_start
+                state = final_state # Ensure timings are from final_state
+                state["timings"]["total_graph"] = graph_duration
+                logger.info("Total graph execution took %.3f seconds", graph_duration)
             except asyncio.TimeoutError:               
                 logger.error("Graph execution timed out after 60 seconds")
                 raise HTTPException(

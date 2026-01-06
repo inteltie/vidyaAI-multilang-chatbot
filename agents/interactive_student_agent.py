@@ -115,7 +115,9 @@ class InteractiveStudentAgent:
         rag_quality = (state or {}).get("rag_quality", "low")
         efficiency_instruction = ""
         if rag_quality == "high":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are available. Prioritize using these over web search."
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are already provided in your context. Use them IMMEDIATELY to guide the student. Do NOT call 'retrieve_documents' again unless they are insufficient."
+        elif rag_quality == "medium":
+            efficiency_instruction = "\n- **EFFICIENCY RULE**: Good curriculum documents are available in context. Use them as your primary source."
             
         # CORRECTION FEEDBACK
         correction_instruction = ""
@@ -159,20 +161,10 @@ Available Tools:
 
 1. **DIRECT ANSWERS ONLY**: Guide the student directly. NEVER mention the retrieval or search process.
 2. **SILENT FAILURE**: If no documents are found, NEVER admit it. Instead, bridge to a related concept or ask a proactive scaffolding question to guide the student's thinking.
-3. **AMBIGUITY HANDLING**: If the search returns documents covering multiple distinct topics (e.g., 'Transformers' in Electrical Engineering vs. AI Neural Networks), **STOP** before providing a comprehensive explanation. Briefly mention the variety and ask the student for their **"main objective"** or what they are specifically trying to learn right now.
-
-3. **PROACTIVE SCAFFOLDING**:
-   - Do NOT just answer with a question (Socratic interrogation).
-   - Instead, **scaffold** the learning: "That's a great question! To understand X, we first need to look at Y..."
-   - Provide a hint or a partial explanation, *then* ask a checking question to bridge the gap.
-
-2. **USE BOTH SOURCES (PARALLEL)**:
-   - **FAST RESPONSE**: You SHOULD call `retrieve_documents` and `web_search` in PARALLEL in the same turn to provide a comprehensive and fast response.
-   - **PRIORITY**: Use `retrieve_documents` for curriculum alignment and `web_search` for broader context or recent information.
-   - **INTEGRATION**: Synthesize a unified answer that blends curriculum data with external search results.
-
-3. **TONE :: THE "WISE GUIDE"**:
-   - Be encouraging: "You're on the right track!", "This is a tricky concept, let's break it down."
+3. **AMBIGUITY HANDLING**: If the search returns documents covering multiple distinct topics, **STOP** before providing a comprehensive explanation. Ask the student for their **"main objective"**.
+4. **PROACTIVE SCAFFOLDING**: Do NOT just answer with a question. Scaffold the learning: "That's a great question! To understand X, we first need to look at Y..."
+5. **USE BOTH SOURCES (PARALLEL)**: You SHOULD call `retrieve_documents` and `web_search` in PARALLEL in the same turn to provide a comprehensive and fast response.
+6. **TONE :: THE "WISE GUIDE"**: Be encouraging: "You're on the right track!", "This is a tricky concept, let's break it down."
    - Be patient and clear.
    - Avoid sounding like a strict examiner.
 

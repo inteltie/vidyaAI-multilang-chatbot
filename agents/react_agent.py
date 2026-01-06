@@ -138,7 +138,10 @@ class ReActAgent:
             logger.info("Agent iteration %d/%d", iteration, self.max_iterations)
             
             # 1. Call LLM
+            llm_start = asyncio.get_event_loop().time()
             response = await self.llm_with_tools.ainvoke(messages)
+            llm_duration = asyncio.get_event_loop().time() - llm_start
+            logger.info("Agent iteration %d: LLM call took %.3fs", iteration, llm_duration)
             messages.append(response)
             
             # 2. Check for tool calls
@@ -207,8 +210,10 @@ class ReActAgent:
 
             # Execute all tool calls concurrently
             if tool_coroutines:
+                tool_start = asyncio.get_event_loop().time()
                 results = await asyncio.gather(*tool_coroutines)
-                logger.info("[TRACE] ReActAgent: Gathered %d tool responses.", len(results))
+                tool_duration = asyncio.get_event_loop().time() - tool_start
+                logger.info("[TRACE] ReActAgent: Gathered %d tool responses in %.3fs.", len(results), tool_duration)
                 
                 # Process results and update state
                 for meta, observation in zip(tool_metadatas, results):
@@ -219,6 +224,7 @@ class ReActAgent:
                         "action": meta["name"],
                         "action_input": str(meta["args"]),
                         "observation": observation,
+                        "duration": tool_duration # Record duration in scratchpad for debugging
                     })
                     
                     # Add tool result to messages

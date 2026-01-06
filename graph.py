@@ -31,7 +31,6 @@ class ChatbotGraphBuilder:
     def __init__(
         self,
         load_memory: LoadMemoryNode,
-        parse_session_context: ParseSessionContextNode,
         analyze_query: AnalyzeQueryNode,
         conversational_agent: ConversationalAgentNode,
         student_agent: StudentAgentNode,
@@ -42,7 +41,6 @@ class ChatbotGraphBuilder:
         save_memory: SaveMemoryNode,
     ) -> None:
         self._load_memory = load_memory
-        self._parse_session_context = parse_session_context
         self._analyze_query = analyze_query
         self._conversational_agent = conversational_agent
         self._student_agent = student_agent
@@ -111,7 +109,6 @@ class ChatbotGraphBuilder:
 
         # Register nodes
         graph.add_node("load_memory", self._load_memory)
-        graph.add_node("parse_session_context", self._parse_session_context)
         graph.add_node("analyze_query", self._analyze_query)
         graph.add_node("conversational_agent", self._conversational_agent)
         graph.add_node("student_agent", self._student_agent)
@@ -122,18 +119,17 @@ class ChatbotGraphBuilder:
         graph.add_node("save_memory", self._save_memory)
 
         # Linear flow to query analysis
-        # Optimized Order: load -> analyze_query -> parse
+        # Optimized Order: load -> analyze_query (now includes context parsing)
         graph.add_edge("load_memory", "analyze_query")
-        graph.add_edge("analyze_query", "parse_session_context")
 
         # Route to appropriate agent
-        # Now routing happens after 'parse_session_context'
+        # Routing now happens directly after 'analyze_query'
         graph.add_conditional_edges(
-            "parse_session_context",
+            "analyze_query",
             self._route_to_agent,
             {
                 "conversational": "conversational_agent",
-                "educational": "route_educational_user",  # NEW: Route by user_type and mode
+                "educational": "route_educational_user",
             },
         )
         

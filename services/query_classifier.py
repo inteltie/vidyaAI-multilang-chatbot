@@ -26,6 +26,10 @@ class QueryClassification(BaseModel):
         default_factory=list,
         description="List of detected educational subjects (Math, Science, History, Geography, General)."
     )
+    class_level: Optional[str] = Field(None, description="Class level, e.g., '10', '12', 'Class 9'")
+    extracted_subject: Optional[str] = Field(None, description="Detailed subject name if mentioned")
+    chapter: Optional[str] = Field(None, description="Chapter or topic name if mentioned")
+    lecture_id: Optional[str] = Field(None, description="Specific lecture/session ID if mentioned")
 
 
 class QueryClassifier:
@@ -89,6 +93,11 @@ Tasks:
 1. Translate the query to clear English (if not already English).
 2. Classify into ONE category: "conversational" or "curriculum_specific".
 3. If "curriculum_specific", detect one or more subjects: [Math, Science, History, Geography, General].
+4. **Context Extraction**: Scan both the query and history for educational metadata:
+   - class_level: (e.g., "Class 10", "Grade 12", "Batch A")
+   - extracted_subject: (e.g., "Algebra", "Organic Chemistry", "Middle Ages")
+   - chapter: (e.g., "Quadratic Equations", "Chapter 5", "World War II")
+   - lecture_id: (e.g., "session_12", "lecture_101", "76")
 
 Conversation history:
 {history_text}
@@ -103,6 +112,7 @@ CRITICAL RULES:
 - If the query is educational in ANY way, choose "curriculum_specific".
 - Use "conversational" for greetings, general help requests ("I need help"), and thanks.
 - For subjects, return a list including any that apply. Use "General" as fallback.
+- Be thorough with Context Extraction. If the user mentions "in session 10", extract lecture_id as "10".
 """
         
         try:
