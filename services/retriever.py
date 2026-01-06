@@ -119,7 +119,7 @@ class RetrieverService:
         WHITELIST = {
             "class_id", "class_name", "subject", "subject_id", 
             "lecture_id", "teacher_id", "teacher_name", 
-            "transcript_id", "is_ingested", "topics"
+            "transcript_id", "is_ingested", "topics", "chapter"
         }
         
         # Numeric fields that MUST be integers for Pinecone filters to work
@@ -197,6 +197,9 @@ class RetrieverService:
                 "include_metadata": True,
                 "include_values": False,
             }
+        
+        if metadata_filter:
+            logger.info("Applying Pinecone metadata filters: %s", metadata_filter)
 
         # Query Pinecone
         pinecone_start = time.time()

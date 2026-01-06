@@ -84,10 +84,14 @@ class AnalyzeQueryNode:
                 from tools import RetrievalTool
                 
                 logger.info("Performing proactive RAG fetch for query: %s", result.translated_query[:50])
-                # Note: We use the request_filters if available in state
+                
+                # Sanitize filters: Strip additionalProp1
+                raw_filters = state.get("request_filters", {})
+                clean_filters = {k: v for k, v in raw_filters.items() if k != "additionalProp1"}
+                
                 docs = await self._retriever.retrieve(
                     query_en=result.translated_query,
-                    filters=state.get("request_filters"),
+                    filters=clean_filters if clean_filters else None,
                     intent=QueryIntent.CONCEPT_EXPLANATION
                 )
                 if docs:
