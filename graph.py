@@ -36,6 +36,7 @@ class ChatbotGraphBuilder:
         student_agent: StudentAgentNode,
         interactive_student_agent: InteractiveStudentAgentNode,
         teacher_agent: TeacherAgentNode,
+        retrieve_documents: RetrieveDocumentsNode,
         groundedness_check: GroundednessCheckNode,
         translate_response: TranslateResponseNode,
         save_memory: SaveMemoryNode,
@@ -46,6 +47,7 @@ class ChatbotGraphBuilder:
         self._student_agent = student_agent
         self._interactive_student_agent = interactive_student_agent
         self._teacher_agent = teacher_agent
+        self._retrieve_documents = retrieve_documents
         self._groundedness_check = groundedness_check
         self._translate_response = translate_response
         self._save_memory = save_memory
@@ -114,6 +116,7 @@ class ChatbotGraphBuilder:
         graph.add_node("student_agent", self._student_agent)
         graph.add_node("interactive_student_agent", self._interactive_student_agent)
         graph.add_node("teacher_agent", self._teacher_agent)
+        graph.add_node("retrieve_documents", self._retrieve_documents)
         graph.add_node("groundedness_check", self._groundedness_check)
         graph.add_node("translate_response", self._translate_response)
         graph.add_node("save_memory", self._save_memory)
@@ -129,12 +132,17 @@ class ChatbotGraphBuilder:
             self._route_to_agent,
             {
                 "conversational": "conversational_agent",
-                "educational": "route_educational_user",
+                "educational": "prepare_educational_flow",
             },
         )
         
         # Add intermediate routing node for educational users
-        graph.add_node("route_educational_user", lambda state: state)  # Pass-through node
+        # This node triggers BOTH retrieval and agent selection in parallel
+        graph.add_node("prepare_educational_flow", lambda state: {})
+        graph.add_edge("prepare_educational_flow", "retrieve_documents")
+        graph.add_edge("prepare_educational_flow", "route_educational_user")
+        
+        graph.add_node("route_educational_user", lambda state: {})  # Pass-through node
         graph.add_conditional_edges(
             "route_educational_user",
             self._route_educational_user,
@@ -152,6 +160,9 @@ class ChatbotGraphBuilder:
         graph.add_edge("student_agent", "groundedness_check")
         graph.add_edge("interactive_student_agent", "groundedness_check")
         graph.add_edge("teacher_agent", "groundedness_check")
+        
+        # RAG retrieval also feeds into validation
+        graph.add_edge("retrieve_documents", "groundedness_check")
 
         # Validation routing
         graph.add_conditional_edges(

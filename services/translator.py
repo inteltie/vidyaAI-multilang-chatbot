@@ -36,8 +36,10 @@ class Translator:
         if target_lang == "en":
             return text
         prompt = (
-            f"Translate the following English educational explanation into {target_lang}. "
-            "Preserve technical accuracy. Respond with only the translated text.\n\n"
+            f"You are a professional translator. Task: Ensure the following text is in **{target_lang}**. \n\n"
+            f"1. If the text is NOT in {target_lang}, translate it ENTIRELY into {target_lang}.\n"
+            f"2. If the text is ALREADY in {target_lang}, return it exactly as it is.\n\n"
+            "Preserve technical terms and academic structure. Respond ONLY with the final text.\n\n"
             f"Text: {text}"
         )
         try:

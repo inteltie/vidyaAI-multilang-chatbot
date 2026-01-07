@@ -33,6 +33,10 @@ class ChatRequest(BaseModel):
         "standard",
         description="Agent mode: 'standard' (default StudentAgent) or 'interactive' (step-by-step InteractiveStudentAgent)"
     )
+    student_grade: Optional[Literal["A", "B", "C", "D"]] = Field(
+        "B",
+        description="Student grade: 'A' (Top), 'B' (Average), 'C' (Below Average), 'D' (Foundational)"
+    )
     
     @field_validator('filters', mode='before')
     @classmethod

@@ -1,5 +1,6 @@
 """LangGraph node: groundedness_check."""
 
+from typing import Any, Dict
 import logging
 from state import AgentState
 from services.response_validator import ResponseValidator
@@ -15,29 +16,34 @@ class GroundednessCheckNode:
     def __init__(self, validator: ResponseValidator):
         self._validator = validator
 
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> Dict[str, Any]:
         from time import perf_counter
         start = perf_counter()
         
+        # Skip validation if mode is disabled
+        from config import settings
+        if settings.validation_mode == "disabled":
+            duration = perf_counter() - start
+            return {"timings": {"groundedness_check": duration}}
+
         # Skip validation if response is a fallback or conversational
         query_type = state.get("query_type")
         response = state.get("response")
         
-        if query_type == "conversational" or not response:
+        # If fast mode, skip conversational queries
+        if settings.validation_mode == "fast" and query_type == "conversational":
             duration = perf_counter() - start
-            timings = state.get("timings") or {}
-            timings["groundedness_check"] = duration
-            state["timings"] = timings
-            return state
+            return {"timings": {"groundedness_check": duration}}
+
+        if not response:
+            duration = perf_counter() - start
+            return {"timings": {"groundedness_check": duration}}
 
         # Don't loop infinitely - limit to 1 correction
         if state.get("is_correction"):
             logger.info("Skipping validation for correction turn to prevent infinite loops.")
             duration = perf_counter() - start
-            timings = state.get("timings") or {}
-            timings["groundedness_check"] = duration
-            state["timings"] = timings
-            return state
+            return {"timings": {"groundedness_check": duration}}
 
         docs = state.get("documents", [])
         intent_subjects = state.get("subjects", [])
@@ -65,9 +71,23 @@ class GroundednessCheckNode:
         else:
             logger.info("Response validated successfully.")
 
+        # Track validation LLM call
+        state["llm_calls"] = state.get("llm_calls", 0) + 1
+
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["groundedness_check"] = duration
-        state["timings"] = timings
         
-        return state
+        # Prepare updates
+        updates = {
+            "timings": {"groundedness_check": duration}
+        }
+        
+        # Only include fields that were potentially modified
+        if "validation_results" in locals() or "result" in locals():
+            updates["validation_results"] = state.get("validation_results")
+            updates["llm_calls"] = 1
+            
+            if state.get("clarification_message"):
+                updates["response"] = state["response"]
+                updates["clarification_message"] = state["clarification_message"]
+        
+        return updates

@@ -1,6 +1,7 @@
 """Teacher agent node for LangGraph integration."""
 
 import logging
+from typing import Any, Dict
 from time import perf_counter
 from agents import TeacherAgent
 from state import AgentState
@@ -14,23 +15,29 @@ class TeacherAgentNode:
     def __init__(self, teacher_agent: TeacherAgent):
         self._agent = teacher_agent
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """Execute Teacher agent and update state."""
         start = perf_counter()
         
+        initial_llm_calls = state.get("llm_calls", 0)
         logger.info("Running Teacher agent with ReAct reasoning")
         
         # Run the Teacher agent (which internally uses ReAct)
-        state = await self._agent(state)
+        new_state = await self._agent(state)
         
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["teacher_agent"] = duration
-        state["timings"] = timings
         
-        logger.info("Teacher agent completed in %.2fs", duration)
+        # Return ONLY the updates to avoid conflicts with parallel RAG node
+        calls_made = new_state.get("llm_calls", 0) - initial_llm_calls
         
-        return state
+        return {
+            "response": new_state.get("response", ""),
+            "citations": new_state.get("citations", []),
+            "llm_calls": max(0, calls_made),
+            "final_language": new_state.get("final_language"),
+            "is_translated": new_state.get("is_translated", False),
+            "timings": {"teacher_agent": duration}
+        }
 
 
 __all__ = ["TeacherAgentNode"]

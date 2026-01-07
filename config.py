@@ -10,6 +10,13 @@ from pydantic import BaseModel, Field, ValidationError
 load_dotenv()
 
 
+def str_to_bool(val: str | None, default: bool = True) -> bool:
+    """Safely convert string to boolean."""
+    if val is None or val == "":
+        return default
+    return val.lower() in ("true", "1", "t", "y", "yes")
+
+
 class Settings(BaseModel):
     """Runtime configuration loaded from environment variables."""
 
@@ -42,6 +49,10 @@ class Settings(BaseModel):
     # Agents
     max_iterations: int = Field(5, description="Max ReAct agent iterations")
     web_search_enabled: bool = Field(True, description="Enable/disable web search tool")
+    validation_mode: Literal["strict", "fast", "disabled"] = Field("fast", description="Groundedness validation mode")
+    enable_query_caching: bool = Field(True, description="Enable caching for query analysis")
+    cache_size: int = Field(1000, description="Size of query analysis cache")
+    parallel_rag_fetch: bool = Field(True, description="Enable parallel RAG retrieval")
     
     # Retrieval
     retriever_top_k: int = Field(5, description="Number of documents to retrieve")
@@ -64,21 +75,25 @@ class Settings(BaseModel):
             "mongo_uri": os.getenv("MONGO_URI") or os.getenv("MONGODB_URI"),
             "mongo_db_name": os.getenv("MONGO_DB_NAME") or os.getenv("DB_NAME"),
             
-            "model_name": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-large"),
-            "llm_temperature": float(os.getenv("LLM_TEMPERATURE", 0.0)),
+            "model_name": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL") or "gpt-4o-mini",
+            "embedding_model": os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large",
+            "llm_temperature": float(os.getenv("LLM_TEMPERATURE") or 0.0),
             
-            "max_tokens_default": int(os.getenv("MAX_TOKENS_DEFAULT", 1500)),
-            "max_tokens_detailed": int(os.getenv("MAX_TOKENS_DETAILED", 3000)),
-            "max_tokens_brief": int(os.getenv("MAX_TOKENS_BRIEF", 800)),
-            "memory_buffer_size": int(os.getenv("MEMORY_BUFFER_SIZE", 20)),
-            "memory_token_limit": int(os.getenv("MEMORY_TOKEN_LIMIT", 2000)),
+            "max_tokens_default": int(os.getenv("MAX_TOKENS_DEFAULT") or 1500),
+            "max_tokens_detailed": int(os.getenv("MAX_TOKENS_DETAILED") or 3000),
+            "max_tokens_brief": int(os.getenv("MAX_TOKENS_BRIEF") or 800),
+            "memory_buffer_size": int(os.getenv("MEMORY_BUFFER_SIZE") or 20),
+            "memory_token_limit": int(os.getenv("MEMORY_TOKEN_LIMIT") or 2000),
             
-            "max_iterations": int(os.getenv("MAX_ITERATIONS", 5)),
-            "web_search_enabled": os.getenv("WEB_SEARCH_ENABLED", "true").lower() == "true",
+            "max_iterations": int(os.getenv("MAX_ITERATIONS") or 5),
+            "web_search_enabled": str_to_bool(os.getenv("WEB_SEARCH_ENABLED"), True),
+            "validation_mode": (os.getenv("VALIDATION_MODE") or "fast").lower(),
+            "enable_query_caching": str_to_bool(os.getenv("ENABLE_QUERY_CACHING", "True")),
+            "cache_size": int(os.getenv("CACHE_SIZE") or 1000),
+            "parallel_rag_fetch": str_to_bool(os.getenv("PARALLEL_RAG_FETCH"), True),
             
-            "retriever_top_k": int(os.getenv("RETRIEVER_TOP_K", 5)),
-            "retriever_score_threshold": float(os.getenv("RETRIEVER_SCORE_THRESHOLD", 0.4)),
+            "retriever_top_k": int(os.getenv("RETRIEVER_TOP_K") or 5),
+            "retriever_score_threshold": float(os.getenv("RETRIEVER_SCORE_THRESHOLD") or 0.4),
         }
         
         # Filter out None values to allow Pydantic to raise validation errors for required fields
@@ -96,12 +111,13 @@ class Settings(BaseModel):
 # Create global settings instance
 try:
     settings = Settings.from_env()
-    # Backward compatibility for existing imports using 'config.SOMETHING'
-    # We will alias 'config' to 'settings' or specific fields if needed during migration.
     config = settings 
 except ValidationError as e:
-    # Allow import without crashing if running in a context without env vars (e.g. CI/build)
-    # But print warning
-    print(f"WARNING: improperly configured environment: {e}")
-    settings = None # type: ignore
-    config = None # type: ignore
+    # Print a very clear error and allow it to propagate if not in a build context
+    print("FATAL: improperly configured environment variables.")
+    print(e)
+    # Re-raise so it's visible in docker logs
+    raise e
+except Exception as e:
+    print(f"FATAL: unexpected error loading configuration: {e}")
+    raise e

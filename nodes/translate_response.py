@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any, Dict
 from time import perf_counter
 
 from services import Translator
 from state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 class TranslateResponseNode:
@@ -14,37 +18,37 @@ class TranslateResponseNode:
     def __init__(self, translator: Translator) -> None:
         self._translator = translator
 
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> Dict[str, Any]:
         start = perf_counter()
-        # Use user's preferred language (from request) as target, not valid detected language
         target_lang = state.get("language", "en")
         response = state.get("response", "")
+        
+        duration = perf_counter() - start
+        
+        # Prepare updates
+        updates = {
+            "timings": {"translate_response": duration}
+        }
+        
+        if target_lang == "en":
+            updates["final_language"] = "en"
+            return updates
 
         if not response:
-            duration = perf_counter() - start
-            timings = state.get("timings") or {}
-            timings["translate_response"] = duration
-            state["timings"] = timings
-            return state
+            return updates
 
-        # Check if response is already translated by the agent
-        if state.get("is_translated"):
-            # Already in target language, skip translation
-            state["final_language"] = target_lang
-            # No additional LLM call
-        elif target_lang != "en":
-            translated = await self._translator.from_english(response, target_lang)
-            state["response"] = translated
-            state["final_language"] = target_lang
-            # one LLM call for response translation
-            state["llm_calls"] = state.get("llm_calls", 0) + 1
-        else:
-            state["final_language"] = "en"
-
+        # Always try to translate if target_lang is not English.
+        logger.info("TranslateResponseNode: Ensuring response is in target language: %s", target_lang)
+        translated = await self._translator.from_english(response, target_lang)
+        
+        # Recalculate duration after LLM call
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["translate_response"] = duration
-        state["timings"] = timings
-        return state
+        updates["timings"]["translate_response"] = duration
+        
+        updates["response"] = translated
+        updates["final_language"] = target_lang
+        updates["llm_calls"] = 1
+
+        return updates
 
 

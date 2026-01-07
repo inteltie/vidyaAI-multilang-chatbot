@@ -101,18 +101,24 @@ class RetrievalTool(Tool):
             if not docs:
                 return f"No documents found for query: '{query}'"
             
-            return self.format_documents(docs)
+            return self.format_documents(docs, min_score=0.450)
         except Exception as exc:
             logger.error("[TRACE] RetrievalTool.execute FAILED: %s", exc)
             return f"Error during retrieval: {str(exc)}"
 
     @staticmethod
-    def format_documents(docs: List[Document]) -> str:
+    def format_documents(docs: List[Document], min_score: float = 0.0) -> str:
         """Format documents for agent observation."""
         if not docs:
             return "No documents found."
             
-        result = f"Found {len(docs)} documents:\n\n"
+        # Filter docs by score
+        docs = [d for d in docs if d.get("score", 0.0) >= min_score]
+        
+        if not docs:
+            return f"No documents found with score >= {min_score}."
+            
+        result = f"Found {len(docs)} relevant documents:\n\n"
         for i, doc in enumerate(docs[:5], 1):  # Show top 5
             metadata = doc.get("metadata", {})
             text_content = doc.get("text", "")

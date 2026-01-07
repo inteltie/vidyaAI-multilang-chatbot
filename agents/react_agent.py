@@ -15,7 +15,7 @@ from tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MESSAGE = "I searched for information but couldn't find the answer. Please try asking a more specific question."
+FALLBACK_MESSAGE = "I couldn't find a definitive answer in the curriculum materials. Could you please provide more details or rephrase your question?"
 
 class ReActAgent:
     """
@@ -29,12 +29,12 @@ class ReActAgent:
         self,
         llm: ChatOpenAI,
         tool_registry: ToolRegistry,
-        max_iterations: int = settings.max_iterations,
+        max_iterations: Optional[int] = None,
         **kwargs,
     ):
         self.llm = llm
         self.tool_registry = tool_registry
-        self.max_iterations = max_iterations
+        self.max_iterations = max_iterations or (settings.max_iterations if settings else 5)
         self.enforce_sequential = kwargs.get("enforce_sequential", False)
         
         # Convert custom tools to LangChain tools

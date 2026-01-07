@@ -52,8 +52,8 @@ class MemoryService:
                     msg["content"] = msg.pop("text")
                 buffer.append(msg)
         else:
-            # Rebuild from MongoDB (last 20 to seed Redis)
-            recent_msgs = session.messages[-20:]
+            # Rebuild from MongoDB (seed Redis)
+            recent_msgs = session.messages[-settings.memory_buffer_size:]
             buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
             
             if buffer:
@@ -108,8 +108,9 @@ class MemoryService:
         
         async with self._redis.pipeline() as pipe:
             await pipe.rpush(redis_key, json.dumps(msg))
-            # Keep Redis buffer slightly larger than token limit for safety (e.g., 30 turns)
-            await pipe.ltrim(redis_key, -30, -1)
+            # Keep Redis buffer slightly larger than default for safety
+            redis_buffer_limit = settings.memory_buffer_size + 10
+            await pipe.ltrim(redis_key, -redis_buffer_limit, -1)
             await pipe.expire(redis_key, 3600)
             await pipe.execute()
 

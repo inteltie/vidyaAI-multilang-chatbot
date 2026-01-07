@@ -10,12 +10,13 @@ class CitationService:
     """Service to parse and standardize citations from agent observations."""
 
     @staticmethod
-    def extract_citations(reasoning_chain: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def extract_citations(reasoning_chain: List[Dict[str, Any]], min_score: float = 0.0) -> List[Dict[str, Any]]:
         """
         Extract citations from retrieved documents in reasoning chain.
         
         Args:
             reasoning_chain: List of agent reasoning steps (action/observation)
+            min_score: Minimum relevance score to include a citation.
             
         Returns:
             List of unique citation dictionaries with standardized fields.
@@ -40,11 +41,12 @@ class CitationService:
                     if "Score:" in line and "[" in line and "]" in line:
                         # Save previous document if valid
                         if current_doc and "lecture_id" in current_doc:
-                            citations.append({
-                                "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
-                                "score": current_doc.get("score", 0.0),
-                                **current_doc
-                            })
+                            if current_doc.get("score", 0.0) >= min_score:
+                                citations.append({
+                                    "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
+                                    "score": current_doc.get("score", 0.0),
+                                    **current_doc
+                                })
                             current_doc = {} # Reset
                         
                         # Start new document
@@ -101,11 +103,12 @@ class CitationService:
                 
                 # Append last document after loop
                 if current_doc and "lecture_id" in current_doc:
-                    citations.append({
-                        "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
-                        "score": current_doc.get("score", 0.0),
-                        **current_doc
-                    })
+                    if current_doc.get("score", 0.0) >= min_score:
+                        citations.append({
+                            "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
+                            "score": current_doc.get("score", 0.0),
+                            **current_doc
+                        })
         
         # Deduplicate citations by lecture_id
         seen = set()

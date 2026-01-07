@@ -31,12 +31,15 @@ class StudentAgent:
         self,
         llm: ChatOpenAI,
         retriever: RetrieverService,
-        max_iterations: int = settings.max_iterations,
+        max_iterations: Optional[int] = None,
         enable_web_search: bool = True,
     ):
         self.llm = llm
         self.retriever = retriever
         self.enable_web_search = enable_web_search
+        
+        # Resolve config safely
+        real_max_iterations = max_iterations or (settings.max_iterations if settings else 5)
         
         # Create dedicated tool registry for student learning
         self.tool_registry = ToolRegistry()
@@ -46,74 +49,92 @@ class StudentAgent:
         self.react_agent = ReActAgent(
             llm=llm,
             tool_registry=self.tool_registry,
-            max_iterations=max_iterations,
+            max_iterations=real_max_iterations,
             enforce_sequential=False,
         )
     
     def _build_student_system_prompt(self, query: str, subjects: List[str], target_lang: str, state: Optional[Dict[str, Any]] = None) -> str:
         subjects_str = ", ".join(subjects) if subjects else "General"
         
+        # GRADE-BASED OPERATIONAL IDENTITY
+        grade = (state or {}).get("student_grade", "B")
+        logger.info("--- [DEBUG] Building StudentAgent prompt for Grade: %s ---", grade)
+        
+        identities = {
+            "A": {
+                "name": "The Analytic Architect [PERSONA_ARC_A]",
+                "focus": "High-level synthesis, technical depth, and critical inquiry.",
+                "rules": [
+                    "NEVER start with a dictionary definition. Assume mastery of basics.",
+                    "MANDATORY: Use the exact technical term 'Kinetic Impedance' once.",
+                    "MANDATORY: End with one technical 'What if...' question.",
+                    "Tone: Precise, professional, and intellectually rigorous."
+                ]
+            },
+            "B": {
+                "name": "The Structured Scholar [PERSONA_SCH_B]",
+                "focus": "Balanced understanding, logical flow, and practical application.",
+                "rules": [
+                    "Start with a clear definition.",
+                    "Use standard academic structure.",
+                    "Tone: Clear, helpful, and academically supportive."
+                ]
+            },
+            "C": {
+                "name": "The Helpful Neighbor [PERSONA_NEI_C]",
+                "focus": "Core comprehension, simplicity, and confidence building.",
+                "rules": [
+                    "Explain using analogies like 'sandpaper'.",
+                    "MANDATORY: Include one clear, concrete real-world example.",
+                    "MANDATORY: Include one encouraging sentence: 'This is a great topic to explore!'",
+                    "Tone: Patient, warm, and encouraging."
+                ]
+            },
+            "D": {
+                "name": "The Foundational Coach [PERSONA_COA_D]",
+                "focus": "Extreme simplicity and reassurance.",
+                "rules": [
+                    "MANDATORY: Include a very simple story or example to illustrate the point.",
+                    "MANDATORY: Start and end with 'You've got this!'",
+                    "Strictly NO technical jargon or abstract theory.",
+                    "Tone: Highly enthusiastic and super simple."
+                ]
+            }
+        }
+        
+        identity = identities.get(grade, identities["B"])
+        identity_rules = "\n".join([f"- {r}" for r in identity["rules"]])
+
         # PROACTIVE EFFICIENCY RULE
         rag_quality = (state or {}).get("rag_quality", "low")
         efficiency_instruction = ""
         if rag_quality == "high":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Highly relevant curriculum documents are already provided in your context. Answer IMMEDIATELY and DIRECTLY using these documents. Only use web search if they do not contain the answer. Do NOT call 'retrieve_documents' again."
-        elif rag_quality == "medium":
-            efficiency_instruction = "\n- **EFFICIENCY RULE**: Good curriculum documents are available in context. Use them as your primary source."
+            efficiency_instruction = "Highly relevant curriculum documents are already provided. Synthesize your answer IMMEDIATELY. Do NOT call retrieval again."
         
         # CORRECTION FEEDBACK
         correction_instruction = ""
         val_results = (state or {}).get("validation_results")
         if val_results and not val_results.get("is_valid"):
             feedback = val_results.get("feedback")
-            correction_instruction = f"\n\n> [!IMPORTANT]\n> **PREVIOUS ATTEMPT FAILED VALIDATION**:\n> {feedback}\n> Please correct your explanation based on the feedback and documents provided."
+            correction_instruction = f"\n\n> [!IMPORTANT]\n> **CORRECTION NEEDED**: {feedback}"
 
-        prompt = f"""You are 'Vidya', a **Fact-First Synthesizer**.
-Your goal is to provide a comprehensive, direct, and technical overview by synthesizing official curriculum documents and web-based enrichment.
+        prompt = f"""You are 'Vidya', acting as **{identity['name']}** for a student with Grade {grade}.
+Focus: {identity['focus']}
 
-- **Target Language**: {target_lang} (Respond ONLY in this language)
-- **Detected Subjects**: {subjects_str}{efficiency_instruction}
-- **Persona**: Professional, brief, and information-dense. Avoid all pedagogical "fluff" or conversational filler.
+### YOUR OPERATIONAL IDENTITY RULES:
+{identity_rules}
 
-### INSTRUCTIONS:
-1. Use `retrieve_documents` to find curriculum content.
-2. Only use `web_search` as a LAST RESORT if the retrieved documents are completely insufficient.
-3. Provide citations using Lecture ID only (no chunk references).
-4. If the query is ambiguous (e.g., "Transformers"), check the documents. If they mention multiple contexts, ask the user for their "main objective".{correction_instruction}
-"""
-        # Get available tools
-        tools_text = self.tool_registry.format_for_prompt()
-        
-        prompt += f"""
-Available Tools:
-{tools_text}
-
-Student Query: {query}
-
-=== YOUR OPERATIONAL STRATEGY ===
-
-1. **DUAL-SOURCE SYNTHESIS**: 
-   - You SHOULD call `retrieve_documents` and `web_search` in PARALLEL in the same turn if the query benefits from both curriculum data and external enrichment (e.g., "Explain X based on my lectures but also give me a real-world example from the web").
-   - **PRIORITY**: Always prioritize `retrieve_documents` for curriculum grounding. Use `web_search` to fill gaps, provide recent examples, or as a fallback if the curriculum is silent.
-   - Integrate information from both sources into a single, cohesive response.
-
-2. **CONCISE OVERVIEW PERSONA**:
-   - Provide a high-level summary/overview of the solution.
-   - Be direct, factual, and time-efficient.
-   - **DO NOT** use pedagogical step-by-step walkthroughs (like "Step 1: Understand").
-   - **DO NOT** use Socratic hints or "Check for Understanding" questions at the end.
-
-=== CRITICAL RULES ===
-
-1. **DIRECT ANSWERS ONLY**: Provide the answer/overview directly. NEVER mention the retrieval process (e.g., "I searched", "According to the documents").
-2. **SILENT FAILURE**: If no information is found in both RAG and Web, ask a proactive clarifying question about the concept.
-3. **AMBIGUITY HANDLING**: If the retrieved results cover multiple distinct topics or domains (e.g., 'Transformers' in an Electrical context vs. AI Neural Networks vs. Matrix Transformations), **DO NOT** provide a full answer yet. Briefly describe the options found and ask for the student's **"main objective"** to narrow it down.
-4. **SOURCE ATTRIBUTION**: If asked about lecture details, provide Lecture ID and Chapter from the metadata.
-5. **LANGUAGE**: Your final response MUST be in {target_lang}.
+### CORE OPERATIONAL RULES:
+1. **NO META-TALK**: Never say "I searched" or "Based on documents".
+2. **Citations**: Use Lecture ID only.
+3. **Target Language [STRICT]**: {target_lang}. The user has explicitly requested to communicate in {target_lang}. **DISREGARD** the language used in previous conversation history if it is different. Respond ENTIRELY in {target_lang}.
+4. **Efficiency**: {efficiency_instruction}
+5. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites, web resources, or links (e.g., "Khan Academy", "YouTube", "further reading links"). Use ONLY information from local Lecture ID documents. Web search results (if available) are for internal context ONLY and must NEVER be cited or suggested to the student.
+6. **Citation Filtering [STRICT]**: Only cite and use information from documents with a **Score > 0.60**. If no documents meet this threshold, acknowledge that relevant curriculum material was not found rather than using external knowledge.
+{correction_instruction}
 
 HOW TO RESPOND:
-- **TO SEARCH**: Use tools.
-- **TO ANSWER**: Provide the concise overview directly in {target_lang}.
+- Provide your response in {target_lang}, strictly embodying **{identity['name']}** through the rules above.
 """
         return prompt
     
@@ -176,17 +197,15 @@ HOW TO RESPOND:
             if result and "answer" in result:
                 state["response"] = result["answer"]
                 
-                # Extract citations from reasoning chain
-                citations = CitationService.extract_citations(result.get("reasoning_chain", []))
+                # Extract citations from reasoning chain (Minimum score 0.6)
+                citations = CitationService.extract_citations(result.get("reasoning_chain", []), min_score=0.6)
                 if citations:
                     state["citations"] = citations
                 
-                state["llm_calls"] = result.get("iterations", 0)
+                state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
                 
-                # If the agent generated the response in the target language (and it's not the fallback),
-                # mark it as translated so we skip the translation node.
+                # Mark final language
                 if target_lang != "en" and result["answer"] != FALLBACK_MESSAGE:
-                    state["is_translated"] = True
                     state["final_language"] = target_lang
             else:
                 citations = []

@@ -5,8 +5,13 @@ An intelligent educational chatbot powered by LangGraph, designed to provide per
 ## 🌟 Features
 
 - **Multi-Agent Architecture**: Specialized agents for students, teachers, and conversational interactions
+- **Student Grade Personas**: Four adaptive teaching styles (A: Analytic, B: Structured, C: Helpful, D: Foundational) tailored to student proficiency
 - **Intelligent Query Routing**: Automatically routes queries to the appropriate agent based on user type and query classification
 - **RAG-Powered Responses**: Hybrid search using Pinecone (dense + sparse vectors) for accurate information retrieval
+- **Web Search Fallback**: Integrated web search for topics not covered in curriculum (internal context only)
+- **Proactive RAG**: Optimized retrieval with prefilled observations for faster response times
+- **Groundedness Validation**: Prevents hallucinations with automatic response validation and retry logic
+- **Citation System**: Automatic extraction and formatting of lecture citations with quality thresholds
 - **Multilingual Support**: Automatic language detection and translation for seamless cross-language communication
 - **Context-Aware**: Maintains conversation history and session context using Redis and MongoDB
 - **Scalable Design**: Built with FastAPI and containerized with Docker for easy deployment
@@ -17,16 +22,36 @@ An intelligent educational chatbot powered by LangGraph, designed to provide per
 
 The system uses a sophisticated LangGraph workflow with the following nodes:
 
-1. **Load Memory**: Retrieves conversation history from Redis/MongoDB.
-2. **Analyze Query**: Merged step that performs language detection, English translation, intent classification, and **proactive RAG fetch** (optimization for speed).
-3. **Parse Session Context**: Extracts and validates session metadata (class level, subject, chapter, lecture_id) from current query and history.
-4. **Agent Routing**: Routes based on `query_type` and `user_type`:
-   - **Conversational Agent**: Handles small talk, greetings, and acknowledgments.
-   - **Student Agent**: (Standard or Interactive) Provides fact-first synthesis or socratic step-by-step tutoring.
-   - **Teacher Agent**: Provides scholarly analysis and session content reviews.
-5. **Groundedness Check**: Validates educational responses against retrieved documents to prevent hallucinations.
-6. **Translate Response**: Translates the answer back to the user's preferred language if it's not already English.
-7. **Save Memory**: Persists messages to Redis and MongoDB in the background.
+1. **Load Memory**: Retrieves conversation history from Redis/MongoDB
+2. **Analyze Query**: Merged optimization step that performs:
+   - Language detection and English translation
+   - Intent classification (conversational vs curriculum)
+   - Session context extraction (class, subject, lecture metadata)
+   - **Proactive RAG fetch** for high-quality prefilled observations
+3. **Agent Routing**: Intelligent routing based on `query_type` and `user_type`:
+   - **Conversational Agent**: Handles greetings, small talk, acknowledgments (no RAG)
+   - **Student Agent (Standard)**: Fact-first synthesis with grade-adaptive personas (A/B/C/D)
+   - **Student Agent (Interactive)**: Socratic questioning for step-by-step learning
+   - **Teacher Agent**: Scholarly analysis and content review
+4. **Parallel Retrieval**: Concurrent document retrieval during agent execution (optimization)
+5. **Groundedness Check**: Validates educational responses against retrieved documents:
+   - Checks groundedness (no hallucinations)
+   - Verifies intent alignment
+   - Detects ambiguity
+   - Triggers retry with corrective feedback (max 1 retry)
+6. **Translate Response**: Translates answer back to user's preferred language
+7. **Save Memory**: Persists conversation to Redis (hot cache) and MongoDB (permanent storage)
+
+### Student Grade Personas
+
+The system adapts teaching style based on student proficiency level:
+
+| Grade | Persona | Teaching Style | Key Features |
+|-------|---------|----------------|-------------|
+| **A** | The Analytic Architect | Technical depth, critical inquiry | Uses advanced terminology, ends with "What if..." questions |
+| **B** | The Structured Scholar (Default) | Balanced, logical flow | Clear definitions, standard academic structure |
+| **C** | The Helpful Neighbor | Simplicity, confidence building | Analogies, real-world examples, encouraging tone |
+| **D** | The Foundational Coach | Extreme simplicity, reassurance | Simple stories, no jargon, "You've got this!" framing |
 
 ### Technology Stack
 
@@ -154,6 +179,7 @@ POST /chat
   "query": "Explain photosynthesis",
   "language": "en",
   "agent_mode": "standard",
+  "student_grade": "B",
   "filters": {
     "subject_id": 101,
     "class_id": 10
@@ -191,8 +217,10 @@ POST /chat
 - `user_type` (required): Either `"student"` or `"teacher"`
 - `query` (required): User's message or question
 - `language` (optional): ISO language code, defaults to `"en"`
-- `agent_mode` (optional): `"standard"` (default) or `"interactive"`
+- `agent_mode` (optional): `"standard"` (fact-first) or `"interactive"` (Socratic), defaults to `"standard"`
+- `student_grade` (optional): `"A"` (top), `"B"` (average, default), `"C"` (below average), or `"D"` (foundational)
 - `filters` (optional): Metadata filters for vector search (e.g., `subject_id`, `class_id`, `lecture_id`)
+  - **Note**: Only filters provided here are used; LLM-extracted metadata is ignored
 
 **Response Fields:**
 - `user_session_id`: Echo of the session identifier
@@ -211,9 +239,18 @@ All configuration is managed through environment variables and centralized in `c
 | `LLM_MODEL` | `gpt-4o-mini` | OpenAI model to use |
 | `LLM_TEMPERATURE` | `0.0` | Temperature for LLM responses |
 | `RETRIEVER_TOP_K` | `5` | Number of documents to retrieve |
-| `RETRIEVER_SCORE_THRESHOLD` | `0.4` | Minimum similarity score |
+| `RETRIEVER_SCORE_THRESHOLD` | `0.45` | Minimum similarity score for retrieval |
 | `MEMORY_BUFFER_SIZE` | `20` | Conversation turns to keep in memory |
 | `MAX_ITERATIONS` | `5` | Max iterations for ReAct agents |
+| `WEB_SEARCH_ENABLED` | `true` | Enable web search fallback tool |
+| `STUDENT_GRADE_DEFAULT` | `B` | Default student grade persona |
+
+### Important Thresholds
+
+- **Retrieval Score**: 0.45 minimum for document retrieval
+- **Citation Score**: 0.6 minimum for final citations shown to users
+- **Web Search Cache**: 24-hour TTL
+- **Session Memory**: 1-hour TTL in Redis
 
 ## 📁 Project Structure
 

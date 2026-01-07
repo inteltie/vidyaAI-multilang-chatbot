@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 from time import perf_counter
-from typing import List
+from typing import Any, Dict, List
 
 from services import MemoryService
 from state import AgentState, ConversationTurn
@@ -20,7 +20,7 @@ class SaveMemoryNode:
         await self._memory_service.background_save_message(session_id, user_id, "user", query)
         await self._memory_service.background_save_message(session_id, user_id, "assistant", response)
 
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> Dict[str, Any]:
         start = perf_counter()
         user_session_id = state["user_session_id"]
         user_id = state["user_id"]
@@ -35,9 +35,8 @@ class SaveMemoryNode:
         asyncio.create_task(self._save_messages_sequentially(user_session_id, user_id, query, response))
 
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["save_memory"] = duration
-        state["timings"] = timings
-        return state
+        return {
+            "timings": {"save_memory": duration}
+        }
 
 

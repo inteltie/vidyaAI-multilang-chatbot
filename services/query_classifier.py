@@ -30,6 +30,10 @@ class QueryClassification(BaseModel):
     extracted_subject: Optional[str] = Field(None, description="Detailed subject name if mentioned")
     chapter: Optional[str] = Field(None, description="Chapter or topic name if mentioned")
     lecture_id: Optional[str] = Field(None, description="Specific lecture/session ID if mentioned")
+    response_language: Optional[str] = Field(
+        None, 
+        description="The language code (e.g., 'hi', 'gu', 'en') if the user explicitly asks for a specific language in this query or if they switch languages."
+    )
 
 
 class QueryClassifier:
@@ -38,6 +42,7 @@ class QueryClassifier:
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
         self._classifier = llm.with_structured_output(QueryClassification)
+        self._cache = {} # Simple cache for query analysis results
     
     def _check_heuristics(self, query: str) -> str | None:
         """Check if query can be classified by simple heuristics."""
@@ -78,7 +83,19 @@ class QueryClassifier:
         
         Returns: QueryClassification object
         """
-        # 1. Try heuristics first (Zero LLM calls) - Skipped for now to ensure translation happens
+        from config import settings
+        import hashlib
+        import json
+        
+        # 1. Check cache first
+        if settings.enable_query_caching:
+            history_text_for_hash = self._format_history(history, limit=2) # Only use 2 turns for cache key stability
+            cache_key = hashlib.md5(f"{query}||{history_text_for_hash}".encode()).hexdigest()
+            if cache_key in self._cache:
+                logger.info("Found query classification in cache for: %s", query[:30])
+                return self._cache[cache_key]
+
+        # 2. Try heuristics first (Zero LLM calls)
         # heuristic_type = self._check_heuristics(query)
         # if heuristic_type:
         #    # If heuristic works, we still need translation if not english...
@@ -98,6 +115,8 @@ Tasks:
    - extracted_subject: (e.g., "Algebra", "Organic Chemistry", "Middle Ages")
    - chapter: (e.g., "Quadratic Equations", "Chapter 5", "World War II")
    - lecture_id: (e.g., "session_12", "lecture_101", "76")
+5. **Language Switch Detection**: Check if the user specifically asks to change the response language (e.g., "Hindi mein samjhao", "Now answer in Gujarati", "Talk in English"). 
+   - If detected, return the ISO 639-1 language code (hi, gu, mr, en, etc.) in response_language.
 
 Conversation history:
 {history_text}
@@ -123,6 +142,20 @@ CRITICAL RULES:
                 result.query_type,
                 result.translated_query
             )
+            
+            # Save to cache if enabled
+            if settings.enable_query_caching:
+                # Basic cache eviction (simple)
+                if len(self._cache) >= settings.cache_size:
+                    # Clear half the cache if full
+                    keys_to_remove = list(self._cache.keys())[:settings.cache_size // 2]
+                    for k in keys_to_remove:
+                        del self._cache[k]
+                
+                # Use the same key generation logic as before
+                history_text_for_hash = self._format_history(history, limit=2)
+                cache_key = hashlib.md5(f"{query}||{history_text_for_hash}".encode()).hexdigest()
+                self._cache[cache_key] = result
             
             return result
             

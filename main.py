@@ -26,6 +26,7 @@ from nodes import (
     SaveMemoryNode,
     TranslateResponseNode,
     GroundednessCheckNode,
+    RetrieveDocumentsNode,
 )
 from services import (
     ContextParser,
@@ -185,7 +186,8 @@ class BackendApp:
             TeacherAgentNode,
         )
         
-        analyze_query_node = AnalyzeQueryNode(query_classifier, retriever_service)
+        analyze_query_node = AnalyzeQueryNode(query_classifier)
+        retrieve_documents_node = RetrieveDocumentsNode(retriever_service)
         conversational_agent_node = ConversationalAgentNode(conversational_agent)
         student_agent_node = StudentAgentNode(student_agent)
         interactive_student_agent_node = InteractiveStudentAgentNode(interactive_student_agent)
@@ -201,6 +203,7 @@ class BackendApp:
             student_agent=student_agent_node,
             interactive_student_agent=interactive_student_agent_node,
             teacher_agent=teacher_agent_node,
+            retrieve_documents=retrieve_documents_node,
             groundedness_check=groundedness_check_node,
             translate_response=translate_response_node,
             save_memory=save_memory_node,
@@ -242,6 +245,7 @@ class BackendApp:
                     "user_type": request.user_type,
                     "language": request.language,
                     "agent_mode": request.agent_mode or "standard",
+                    "student_grade": request.student_grade or "B",
                     "conversation_history": [],
                     "session_metadata": {},
                     "query_en": "",
@@ -300,18 +304,8 @@ class BackendApp:
             for step, duration in sorted(timings.items()):
                 logger.info("timing step=%s duration=%.3fs", step, duration)
 
-            # Append human-readable citation summary to the message body (if any).
-            lecture_ids = sorted(
-                {c.get("lecture_id") for c in citations if c.get("lecture_id")}
-            )
-            if lecture_ids:
-                session_str = ", ".join(str(sid) for sid in lecture_ids)
-                if message:
-                    message = f"{message}\n\n---\nSources (lecture_id): {session_str}"
-                else:
-                    message = f"Sources (lecture_id): {session_str}"
-
-
+            # Skip appending human-readable citation summary to keep response clean (requested by user)
+            
             return ChatResponse(
                 user_session_id=request.user_session_id,
                 message=message,

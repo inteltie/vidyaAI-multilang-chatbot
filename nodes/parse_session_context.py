@@ -18,7 +18,7 @@ class ParseSessionContextNode:
     def __init__(self, parser: ContextParser) -> None:
         self._parser = parser
 
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
         
         history = state.get("conversation_history", [])
@@ -29,8 +29,12 @@ class ParseSessionContextNode:
         keywords = {"class", "subject", "chapter", "topic", "module", "grade", "standard", "batch"}
         query_type = state.get("query_type", "curriculum_specific")
         
+        current_metadata = state.get("session_metadata", {})
+        metadata_complete = current_metadata.get("subject") and current_metadata.get("class_level")
+        
         should_parse = (
-            query_type != "conversational" and (
+            query_type != "conversational" and 
+            not metadata_complete and (
                 len(history) < 2 or 
                 any(k in query for k in keywords) or
                 state.get("is_context_reply", False)
@@ -54,21 +58,18 @@ class ParseSessionContextNode:
                 if v: # Only override if value is present in UI/session
                     merged_metadata[k] = v
             
-            state["session_metadata"] = merged_metadata
-            
-            # One LLM call for parsing session context
-            state["llm_calls"] = state.get("llm_calls", 0) + 1
-        else:
-            # Reuse existing metadata if available
-            state["session_metadata"] = state.get("session_metadata", {})
         
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["parse_session_context"] = duration
-        state["timings"] = timings
         
-        return state
+        updates = {
+            "timings": {"parse_session_context": duration}
+        }
+        
+        if should_parse:
+            updates["session_metadata"] = merged_metadata
+            updates["llm_calls"] = 1
+        
+        return updates
 
 
 __all__ = ["ParseSessionContextNode"]
-

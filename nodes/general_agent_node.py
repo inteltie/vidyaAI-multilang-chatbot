@@ -14,17 +14,20 @@ class GeneralAgentNode:
     def __init__(self, agent: GeneralAgent) -> None:
         self._agent = agent
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
         
-        state = await self._agent(state)
+        initial_llm_calls = state.get("llm_calls", 0)
+        new_state = await self._agent(state)
         
         duration = perf_counter() - start
-        timings = state.get("timings") or {}
-        timings["general_agent"] = duration
-        state["timings"] = timings
+        calls_made = new_state.get("llm_calls", 0) - initial_llm_calls
         
-        return state
+        return {
+            "response": new_state.get("response", ""),
+            "llm_calls": max(0, calls_made),
+            "timings": {"general_agent": duration}
+        }
 
 
 __all__ = ["GeneralAgentNode"]

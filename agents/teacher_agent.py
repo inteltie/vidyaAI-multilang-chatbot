@@ -30,10 +30,13 @@ class TeacherAgent:
         self,
         llm: ChatOpenAI,
         retriever: RetrieverService,
-        max_iterations: int = settings.max_iterations,
+        max_iterations: Optional[int] = None,
     ):
         self.llm = llm
         self.retriever = retriever
+        
+        # Resolve config safely
+        real_max_iterations = max_iterations or (settings.max_iterations if settings else 5)
         
         # Create dedicated tool registry for teacher analytics
         self.tool_registry = ToolRegistry()
@@ -43,7 +46,7 @@ class TeacherAgent:
         self.react_agent = ReActAgent(
             llm=llm,
             tool_registry=self.tool_registry,
-            max_iterations=max_iterations,
+            max_iterations=real_max_iterations,
             enforce_sequential=False,
         )
     
@@ -102,7 +105,7 @@ class TeacherAgent:
             if result and "answer" in result:
                 state["response"] = result["answer"]
                 state["citations"] = citations
-                state["llm_calls"] = result.get("iterations", 0)
+                state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
                 
                 # If the agent generated the response in the target language (and it's not the fallback),
                 # mark it as translated so we skip the translation node.
