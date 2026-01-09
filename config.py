@@ -35,6 +35,8 @@ class Settings(BaseModel):
 
     # -- Model Settings --
     model_name: str = Field("gpt-4o-mini", description="LLM Model Name")
+    web_search_model_name: str = Field("", description="Web Search Model Name")
+    validator_model_name: str = Field("gpt-4o-mini", description="Validator Model Name")
     embedding_model: str = Field("text-embedding-3-large", description="Embedding Model Name")
     llm_temperature: float = Field(0.0, description="LLM Temperature")
 
@@ -76,6 +78,8 @@ class Settings(BaseModel):
             "mongo_db_name": os.getenv("MONGO_DB_NAME") or os.getenv("DB_NAME"),
             
             "model_name": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL") or "gpt-4o-mini",
+            "web_search_model_name": os.getenv("WEB_SEARCH_MODEL_NAME") or "gpt-4o-mini",
+            "validator_model_name": os.getenv("VALIDATOR_MODEL_NAME") or "gpt-4o-mini",
             "embedding_model": os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large",
             "llm_temperature": float(os.getenv("LLM_TEMPERATURE") or 0.0),
             

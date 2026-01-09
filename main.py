@@ -134,7 +134,7 @@ class BackendApp:
         
         # LLM for validation (Fast and efficient for groundedness checks)
         llm_fast = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=self._settings.validator_model_name,
             api_key=self._settings.openai_api_key,
             temperature=0.0,
             max_tokens=self._settings.max_tokens_default,

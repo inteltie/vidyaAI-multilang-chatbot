@@ -15,11 +15,13 @@ from services.response_validator import ResponseValidator, ValidationResult
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from config import settings
+
 async def verify_validation_speed():
     load_dotenv()
     
-    # Using gpt-4o-mini as per optimization
-    llm_fast = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    # Using configured validator model
+    llm_fast = ChatOpenAI(model=settings.validator_model_name, temperature=0)
     validator = ResponseValidator(llm_fast)
     
     print("\n--- Testing Validation Performance (gpt-4o-mini) ---")

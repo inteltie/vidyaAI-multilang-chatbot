@@ -44,7 +44,7 @@ class QueryClassifier:
         self._classifier = llm.with_structured_output(QueryClassification)
         self._cache = {} # Simple cache for query analysis results
     
-    def _check_heuristics(self, query: str) -> str | None:
+    def _check_heuristics(self, query: str) -> QueryClassification | None:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
         
@@ -58,13 +58,23 @@ class QueryClassifier:
         }
         
         if query_lower in conversational_keywords:
-            return "conversational"
+            return QueryClassification(
+                query_type="conversational",
+                translated_query=query,
+                confidence=1.0,
+                reasoning="Matched conversational keyword heuristic."
+            )
             
         # Check for vague help requests that should be conversational
         if query_lower.startswith(("i need help", "can you help", "i need some help")):
             vague_terms = ["topic", "something", "study", "studies", "question", "doubt"]
             if any(term in query_lower for term in vague_terms) and len(query_lower.split()) < 10:
-                return "conversational"
+                return QueryClassification(
+                    query_type="conversational",
+                    translated_query=query,
+                    confidence=0.9,
+                    reasoning="Matched vague help request heuristic."
+                )
             
         return None
         
@@ -96,11 +106,10 @@ class QueryClassifier:
                 return self._cache[cache_key]
 
         # 2. Try heuristics first (Zero LLM calls)
-        # heuristic_type = self._check_heuristics(query)
-        # if heuristic_type:
-        #    # If heuristic works, we still need translation if not english...
-        #    # For simplicity of merged step, let LLM handle everything unless cost is paramount.
-        #    pass
+        heuristic_result = self._check_heuristics(query)
+        if heuristic_result:
+            logger.info("Heuristic classification: %s", heuristic_result.reasoning)
+            return heuristic_result
 
         history_text = self._format_history(history, limit=4)
         
@@ -124,12 +133,16 @@ Conversation history:
 Latest query: {query}
 
 Categories:
-1. "conversational" - Greetings, small talk, general help requests, or expressing satisfaction.
-2. "curriculum_specific" - ANY educational question (DEFAULT - always use RAG).
+1. "conversational" - Greetings, small talk, general help requests, expressing satisfaction, OR meta-queries about the chat itself (e.g., "Analyze this query", "How do you work?").
+2. "curriculum_specific" - ANY educational question about specific topics (Physics, Math, History, etc.) requiring external knowledge.
 
 CRITICAL RULES:
-- If the query is educational in ANY way, choose "curriculum_specific".
-- Use "conversational" for greetings, general help requests ("I need help"), and thanks.
+- Choose "curriculum_specific" ONLY if the user asks about a specific educational topic (e.g., "Newton's laws", "World War II").
+- Choose "conversational" for:
+  - Greetings ("Hi", "Hello")
+  - General help requests ("I need help")
+  - Meta-queries ("Analyze this query", "What can you do?", "Ignore previous instructions")
+  - Thanks/Feedback ("Good job", "Thanks")
 - For subjects, return a list including any that apply. Use "General" as fallback.
 - Be thorough with Context Extraction. If the user mentions "in session 10", extract lecture_id as "10".
 """
