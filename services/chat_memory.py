@@ -106,6 +106,14 @@ class MemoryService:
         redis_key = f"chat:{session_id}:buffer"
         msg = {"role": role, "content": content}
         
+        # Check last message in Redis to prevent duplicates
+        last_msg_json = await self._redis.lindex(redis_key, -1)
+        if last_msg_json:
+            last_msg = json.loads(last_msg_json)
+            if last_msg.get("role") == role and last_msg.get("content") == content:
+                logger.warning(f"Duplicate Redis message detected for session {session_id}. Skipping.")
+                return
+
         async with self._redis.pipeline() as pipe:
             await pipe.rpush(redis_key, json.dumps(msg))
             # Keep Redis buffer slightly larger than default for safety
@@ -125,6 +133,13 @@ class MemoryService:
                 except DuplicateKeyError:
                     session = await ChatSession.find_one(ChatSession.session_id == session_id)
             
+            # Check for duplicate message in MongoDB
+            if session.messages:
+                last_msg = session.messages[-1]
+                if last_msg.role == role and last_msg.text == content:
+                    logger.warning(f"Duplicate MongoDB message detected for session {session_id}. Skipping.")
+                    return
+
             await session.add_message(role, content)
             
             # Update summary every 20 messages (or every 10 if session is long)

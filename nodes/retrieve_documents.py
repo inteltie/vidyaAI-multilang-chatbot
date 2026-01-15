@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any, Dict
 from time import perf_counter
 
@@ -32,13 +33,35 @@ class RetrieveDocumentsNode:
         clean_filters = {k: v for k, v in request_filters.items() if k != "additionalProp1"}
         
         from models import QueryIntent
-        docs = await self._retriever.retrieve(
+        intent = state.get("intent", QueryIntent.CONCEPT_EXPLANATION)
+
+        # Proactive Web Search trigger: If keywords detected, we start it PARALLEL with RAG
+        needs_web_proactive = any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"])
+        
+        # Define tasks
+        rag_task = self._retriever.retrieve(
             query_en=query_en,
             filters=clean_filters if clean_filters else None,
-            intent=state.get("intent", QueryIntent.CONCEPT_EXPLANATION)
+            intent=intent
         )
         
+        web_task = None
+        if needs_web_proactive:
+            from tools.web_search_tool import WebSearchTool
+            logger.info("Triggering proactive web search in parallel with RAG...")
+            web_tool = WebSearchTool()
+            web_task = web_tool.execute(query=query_en)
+
+        # Execute parallelized tasks
+        if web_task:
+            docs, web_results = await asyncio.gather(rag_task, web_task)
+        else:
+            docs = await rag_task
+            web_results = None
+
         state["prefilled_observations"] = []
+        
+        # Process RAG results
         if docs:
             # Filter for state["documents"] as well to ensure validator uses high-score docs
             high_score_docs = [d for d in docs if d.get("score", 0.0) >= 0.40]
@@ -68,9 +91,21 @@ class RetrieveDocumentsNode:
             state["rag_quality"] = "low"
             logger.warning("No documents retrieved")
 
-        # PROACTIVE WEB SEARCH: If quality is low or external cues detected
-        if state.get("rag_quality") == "low" or any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"]):
-            logger.info("Triggering proactive web search...")
+        # Handle Web Search results (either from parallel task or needed due to low quality)
+        llm_calls_in_node = 0
+        
+        if web_results:
+            # Web search was done in parallel
+            state["prefilled_observations"].append({
+                "tool": "web_search",
+                "args": {"query": query_en},
+                "observation": web_results
+            })
+            llm_calls_in_node += 1
+            logger.info("Proactive web search results added.")
+        elif state.get("rag_quality") == "low":
+            # RAG failed, and we didn't start web search in parallel. Start it now.
+            logger.info("RAG quality low. Triggering reactive web search...")
             from tools.web_search_tool import WebSearchTool
             web_tool = WebSearchTool()
             web_results = await web_tool.execute(query=query_en)
@@ -79,8 +114,8 @@ class RetrieveDocumentsNode:
                 "args": {"query": query_en},
                 "observation": web_results
             })
-            state["llm_calls"] = state.get("llm_calls", 0) + 1
-            logger.info("Proactive web search completed.")
+            llm_calls_in_node += 1
+            logger.info("Reactive web search completed.")
 
         # Build lightweight citations
         citations = []
@@ -98,18 +133,14 @@ class RetrieveDocumentsNode:
 
         duration = perf_counter() - start
         
-        # Return ONLY the updates to avoid conflicts with parallel agent node
-        # For llm_calls, we return the DELTA (calls made in THIS node)
-        # so the operator.add reducer in AgentState works correctly.
-        calls_made = 1 if (state.get("rag_quality") == "low" or any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"])) else 0
-
         return {
             "documents": state["documents"],
             "prefilled_observations": state["prefilled_observations"],
             "rag_quality": state["rag_quality"],
             "citations": state["citations"],
-            "llm_calls": calls_made,
+            "llm_calls": llm_calls_in_node,
             "timings": {"retrieve_documents": duration}
         }
 
 
+__all__ = ["RetrieveDocumentsNode"]

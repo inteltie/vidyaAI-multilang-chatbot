@@ -77,22 +77,41 @@ class BackendApp:
             logger.info("Starting up application...")
             
             # Redis initialization
-            self._redis_client = aioredis.from_url(
-                self._settings.redis_url,
-                decode_responses=True,
-            )
+            for i in range(5):
+                try:
+                    self._redis_client = aioredis.from_url(
+                        self._settings.redis_url,
+                        decode_responses=True,
+                    )
+                    await self._redis_client.ping()
+                    logger.info("Connected to Redis.")
+                    break
+                except Exception as e:
+                    if i == 4:
+                        logger.error(f"Failed to connect to Redis after 5 attempts: {e}")
+                        raise
+                    logger.warning(f"Redis connection attempt {i+1} failed, retrying in {2**i}s...")
+                    await asyncio.sleep(2**i)
             
             # MongoDB initialization
-            try:
-                client = AsyncIOMotorClient(self._settings.mongo_uri)
-                await init_beanie(
-                    database=client[self._settings.mongo_db_name],
-                    document_models=[ChatSession]
-                )
-                logger.info("MongoDB connected and Beanie initialized.")
-            except Exception as e:
-                logger.error(f"Failed to initialize MongoDB: {e}")
-                raise
+            for i in range(5):
+                try:
+                    client = AsyncIOMotorClient(
+                        self._settings.mongo_uri,
+                        serverSelectionTimeoutMS=5000
+                    )
+                    await init_beanie(
+                        database=client[self._settings.mongo_db_name],
+                        document_models=[ChatSession]
+                    )
+                    logger.info("MongoDB connected and Beanie initialized.")
+                    break
+                except Exception as e:
+                    if i == 4:
+                        logger.error(f"Failed to initialize MongoDB after 5 attempts: {e}")
+                        raise
+                    logger.warning(f"MongoDB connection attempt {i+1} failed, retrying in {2**i}s...")
+                    await asyncio.sleep(2**i)
 
             self._graph = self._build_graph()
             logger.info("LangGraph compiled and application started.")

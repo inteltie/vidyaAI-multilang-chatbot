@@ -88,7 +88,6 @@ class RetrievalTool(Tool):
         logger.info("[TRACE] RetrievalTool.execute started for query: %s", query)
         try:
             # filters argument takes precedence and is used exclusively for Pinecone search.
-            # kwargs (LLM extracted metadata) are ignored for search to strictly follow user request context.
             if kwargs:
                 logger.info("Ignoring LLM-extracted filters for search: %s", kwargs)
 
@@ -108,7 +107,7 @@ class RetrievalTool(Tool):
 
     @staticmethod
     def format_documents(docs: List[Document], min_score: float = 0.0) -> str:
-        """Format documents for agent observation."""
+        """Format documents for agent observation with minimal metadata."""
         if not docs:
             return "No documents found."
             
@@ -118,22 +117,12 @@ class RetrievalTool(Tool):
         if not docs:
             return f"No documents found with score >= {min_score}."
             
-        result = f"Found {len(docs)} relevant documents:\n\n"
-        for i, doc in enumerate(docs[:5], 1):  # Show top 5
+        result = f"Found {len(docs)} relevant documents (Top 5 shown):\n\n"
+        for i, doc in enumerate(docs[:5], 1):
             metadata = doc.get("metadata", {})
             text_content = doc.get("text", "")
-            result += f"{i}. [Score: {doc.get('score', 0):.2f}]\n"
-            result += f"   Lecture ID: {metadata.get('lecture_id', 'N/A')}\n"
-            result += f"   Transcript ID: {metadata.get('transcript_id', 'N/A')}\n"
-            result += f"   Chunk ID: {metadata.get('chunk_id', 'N/A')}\n"
-            result += f"   Chapter: {metadata.get('chapter', 'N/A')}\n"
-            result += f"   Subject: {metadata.get('subject', 'N/A')}\n"
-            result += f"   Subject ID: {metadata.get('subject_id', 'N/A')}\n"
-            result += f"   Topics: {metadata.get('topics', 'N/A')}\n"
-            result += f"   Class Name: {metadata.get('class_name', 'N/A')}\n"
-            result += f"   Class ID: {metadata.get('class_id', 'N/A')}\n"
-            result += f"   Teacher Name: {metadata.get('teacher_name', 'N/A')}\n"
-            result += f"   Teacher ID: {metadata.get('teacher_id', 'N/A')}\n"
+            # SLIMMED DOWN METADATA: Only what's needed for citations and context
+            result += f"{i}. [Score: {doc.get('score', 0):.2f}] Lecture: {metadata.get('lecture_id', 'N/A')} | Chapter: {metadata.get('chapter', 'N/A')} | Subject: {metadata.get('subject', 'N/A')}\n"
             result += f"   Content: {text_content}\n\n"
         
         if len(docs) > 5:
