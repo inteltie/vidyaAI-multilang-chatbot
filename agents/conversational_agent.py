@@ -24,13 +24,29 @@ class ConversationalAgent:
             response = "Goodbye! Happy learning! 📚"
         elif any(phrase in query for phrase in ["solved", "clear now", "got it", "understood"]):
             response = "Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
-        elif any(word in query for word in ["hello", "hi", "hey"]):
-            response = "Hello! How can I help you with your studies today?"
         else:
-            # Use LLM for other conversational responses
+            # Use LLM with history and summary for personalized responses
+            history = state.get("conversation_history", [])
+            summary = state.get("session_metadata", {}).get("summary", "")
+            
+            # Format history clearly: "STUDENT: ...", "VIDYA: ..."
+            # Format history clearly: "STUDENT: ...", "VIDYA: ..."
+            history_text = ""
+            for m in history[-12:]: 
+                # LangChain messages use .type and .content
+                role = "STUDENT" if m.type == "human" else "VIDYA"
+                history_text += f"{role}: {m.content}\n"
+            
             prompt = (
-                f"Respond naturally and briefly to this student message: '{state['query']}'\n"
-                "Keep it friendly and educational. Offer to help if appropriate."
+                f"You are Vidya, a friendly and helpful educational assistant. "
+                f"Respond naturally to the student's message. IMPORTANT: Use the history below to see if the student shared their name (like 'Rahul' or 'Aisha') and use it.\n\n"
+                f"Conversation Summary: {summary}\n"
+                f"Recent Interaction History:\n{history_text}\n"
+                f"Latest Message from Student: {state['query']}\n\n"
+                f"Response Guidelines:\n"
+                f"- Be warm and personalized.\n"
+                f"- If the student shared their name earlier, use it.\n"
+                f"- Keep the response brief and encouraging (under 100 tokens)."
             )
             resp = await self._llm.ainvoke(prompt)
             response = resp.content.strip()

@@ -1,12 +1,15 @@
 """LangGraph node: save_memory."""
 
 from __future__ import annotations
+import logging
 import asyncio
 from time import perf_counter
 from typing import Any, Dict, List
 
 from services import MemoryService
 from state import AgentState, ConversationTurn
+
+logger = logging.getLogger(__name__)
 
 
 class SaveMemoryNode:
@@ -26,6 +29,13 @@ class SaveMemoryNode:
         user_id = state["user_id"]
         query = state["query"]
         response = state.get("response", "")
+
+        logger.info(f"[DEBUG_SAVE] Session: {user_session_id} | Query: {query[:50]} | Resp: {response[:50]}...")
+
+        # Safety check: Don't save if response is empty (prevents half-saves)
+        if not response:
+            logger.warning("Attempted to save empty response. Skipping memory update.")
+            return {"timings": {"save_memory": 0}}
 
         # 1. Update Redis buffer (await - fast)
         await self._memory_service.add_message(user_session_id, "user", query)

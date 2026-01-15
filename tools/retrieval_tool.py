@@ -119,11 +119,9 @@ class RetrievalTool(Tool):
             
         result = f"Found {len(docs)} relevant documents (Top 5 shown):\n\n"
         for i, doc in enumerate(docs[:5], 1):
-            metadata = doc.get("metadata", {})
             text_content = doc.get("text", "")
-            # SLIMMED DOWN METADATA: Only what's needed for citations and context
-            result += f"{i}. [Score: {doc.get('score', 0):.2f}] Lecture: {metadata.get('lecture_id', 'N/A')} | Chapter: {metadata.get('chapter', 'N/A')} | Subject: {metadata.get('subject', 'N/A')}\n"
-            result += f"   Content: {text_content}\n\n"
+            # Only include Text and Score to avoid LLM distraction
+            result += f"Source {i} [Score: {doc.get('score', 0):.2f}]: {text_content}\n\n"
         
         if len(docs) > 5:
             result += f"... and {len(docs) - 5} more documents\n"

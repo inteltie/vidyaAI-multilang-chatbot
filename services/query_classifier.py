@@ -48,13 +48,11 @@ class QueryClassifier:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
         
-        # Conversational keywords
+        # Conversational keywords (only if they are the ONLY word/phrase)
         conversational_keywords = {
             "hi", "hello", "hey", "greetings",
             "thanks", "thank you", "thx", "cool", "ok", "okay", "got it",
-            "bye", "goodbye", "see ya",
-            "who are you", "what are you",
-            "help", "i need help"
+            "bye", "goodbye", "see ya"
         }
         
         if query_lower in conversational_keywords:
@@ -111,20 +109,21 @@ class QueryClassifier:
             logger.info("Heuristic classification: %s", heuristic_result.reasoning)
             return heuristic_result
 
-        history_text = self._format_history(history, limit=4)
+        history_text = self._format_history(history, limit=10)
         
         prompt = f"""Analyze this student query. 
 
 Tasks:
-1. Translate the query to clear English (if not already English).
-2. Classify into ONE category: "conversational" or "curriculum_specific".
-3. If "curriculum_specific", detect one or more subjects: [Math, Science, History, Geography, General].
-4. **Context Extraction**: Scan both the query and history for educational metadata:
+1. **Query Contextualization (CRITICAL)**: If the latest query is a follow-up or contains pronouns/contextual references (e.g., "What are its requirements?", "Why?", "Explain more"), reconstruct it into a standalone English query using the conversation history. Example: "What are its requirements?" -> "What are the requirements for photosynthesis?".
+2. Translate the query to clear English (if not already English).
+3. Classify into ONE category: "conversational" or "curriculum_specific".
+4. If "curriculum_specific", detect one or more subjects: [Math, Science, History, Geography, General].
+5. **Context Extraction**: Scan both the query and history for educational metadata:
    - class_level: (e.g., "Class 10", "Grade 12", "Batch A")
    - extracted_subject: (e.g., "Algebra", "Organic Chemistry", "Middle Ages")
    - chapter: (e.g., "Quadratic Equations", "Chapter 5", "World War II")
    - lecture_id: (e.g., "session_12", "lecture_101", "76")
-5. **Language Switch Detection**: Check if the user specifically asks to change the response language (e.g., "Hindi mein samjhao", "Now answer in Gujarati", "Talk in English"). 
+6. **Language Switch Detection**: Check if the user specifically asks to change the response language (e.g., "Hindi mein samjhao", "Now answer in Gujarati", "Talk in English"). 
    - If detected, return the ISO 639-1 language code (hi, gu, mr, en, etc.) in response_language.
 
 Conversation history:
@@ -137,6 +136,7 @@ Categories:
 2. "curriculum_specific" - ANY educational question about specific topics (Physics, Math, History, etc.) requiring external knowledge.
 
 CRITICAL RULES:
+- **Standalone Query**: Always return a complete, standalone version of the query in `translated_query`.
 - Choose "curriculum_specific" ONLY if the user asks about a specific educational topic (e.g., "Newton's laws", "World War II").
 - Choose "conversational" for:
   - Greetings ("Hi", "Hello")

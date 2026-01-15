@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
@@ -16,10 +17,13 @@ from nodes import (
     TeacherAgentNode,
     TranslateResponseNode,
     GroundednessCheckNode,
+    RetrieveDocumentsNode,
+    AnalyzeQueryNode,
 )
 from models import QueryIntent
 from state import AgentState
 
+logger = logging.getLogger(__name__)
 
 RouteKey = Literal["off_topic", "needs_context", "ok"]
 AgentRouteKey = Literal["conversational", "educational"]
@@ -72,20 +76,8 @@ class ChatbotGraphBuilder:
         
         if query_type == "conversational":
             return "conversational"
-        else:  # curriculum_specific → route by user_type
+        else:  # curriculum_specific -> route by user_type
             return "educational"
-
-    @staticmethod
-    def _route_after_context(state: AgentState) -> RouteKey:
-        """Routing logic after `check_context` node."""
-        intent = state.get("intent")
-        needs_context = bool(state.get("needs_context"))
-
-        if intent == QueryIntent.OFF_TOPIC:
-            return "off_topic"
-        if needs_context:
-            return "needs_context"
-        return "ok"
 
     @staticmethod
     def _route_after_validation(state: AgentState) -> Literal["pass", "fail"]:
@@ -121,12 +113,11 @@ class ChatbotGraphBuilder:
         graph.add_node("translate_response", self._translate_response)
         graph.add_node("save_memory", self._save_memory)
 
-        # Linear flow to query analysis
-        # Optimized Order: load -> analyze_query (now includes context parsing)
+        # 1. Start with memory loading
+        graph.set_entry_point("load_memory")
         graph.add_edge("load_memory", "analyze_query")
 
-        # Route to appropriate agent
-        # Routing now happens directly after 'analyze_query'
+        # 2. Main Routing: Conversational vs Educational
         graph.add_conditional_edges(
             "analyze_query",
             self._route_to_agent,
@@ -135,14 +126,19 @@ class ChatbotGraphBuilder:
                 "educational": "prepare_educational_flow",
             },
         )
-        
-        # Add intermediate routing node for educational users
-        # This node triggers BOTH retrieval and agent selection in parallel
+
+        # 3. Conversational Pipeline: Direct to translation
+        graph.add_edge("conversational_agent", "translate_response")
+
+        # 4. Educational Pipeline: Strictly Sequential (Retrieval -> Agent -> Validation)
+        # This prevents the race condition and duplication
         graph.add_node("prepare_educational_flow", lambda state: {})
         graph.add_edge("prepare_educational_flow", "retrieve_documents")
-        graph.add_edge("prepare_educational_flow", "route_educational_user")
         
-        graph.add_node("route_educational_user", lambda state: {})  # Pass-through node
+        # After retrieval, route to specific educational agent
+        graph.add_edge("retrieve_documents", "route_educational_user")
+        
+        graph.add_node("route_educational_user", lambda state: {}) # Pass-through
         graph.add_conditional_edges(
             "route_educational_user",
             self._route_educational_user,
@@ -153,18 +149,11 @@ class ChatbotGraphBuilder:
             },
         )
 
-        # All agents go to translation (except educational which go to validation)
-        graph.add_edge("conversational_agent", "translate_response")
-        
-        # Educational agents go to validation
+        # 5. Validation: All educational agents go through groundedness_check
         graph.add_edge("student_agent", "groundedness_check")
         graph.add_edge("interactive_student_agent", "groundedness_check")
         graph.add_edge("teacher_agent", "groundedness_check")
-        
-        # RAG retrieval also feeds into validation
-        graph.add_edge("retrieve_documents", "groundedness_check")
 
-        # Validation routing
         graph.add_conditional_edges(
             "groundedness_check",
             self._route_after_validation,
@@ -174,11 +163,8 @@ class ChatbotGraphBuilder:
             }
         )
 
-        # Translation → Save → END
+        # 6. Finalization: Translation -> Save -> END
         graph.add_edge("translate_response", "save_memory")
-
-        # Set entry point
-        graph.set_entry_point("load_memory")
         graph.set_finish_point("save_memory")
 
         return graph
@@ -190,5 +176,3 @@ class ChatbotGraphBuilder:
 
 
 __all__ = ["ChatbotGraphBuilder"]
-
-

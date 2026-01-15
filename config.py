@@ -42,10 +42,10 @@ class Settings(BaseModel):
 
     # -- Application Settings --
     # Memory
-    max_tokens_default: int = Field(1500, description="Default max tokens for LLM response")
-    max_tokens_detailed: int = Field(3000, description="Max tokens for detailed responses")
-    max_tokens_brief: int = Field(800, description="Max tokens for brief responses")
-    memory_buffer_size: int = Field(20, description="Number of turns to keep in memory buffer")
+    max_tokens_default: int = Field(500, description="Default max tokens for LLM response")
+    max_tokens_detailed: int = Field(1000, description="Max tokens for detailed responses")
+    max_tokens_brief: int = Field(300, description="Max tokens for brief responses")
+    memory_buffer_size: int = Field(10, description="Number of turns to keep in memory buffer")
     memory_token_limit: int = Field(2000, description="Max tokens for conversation history buffer")
     
     # Agents

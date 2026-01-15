@@ -142,8 +142,8 @@ class MemoryService:
 
             await session.add_message(role, content)
             
-            # Update summary every 20 messages (or every 10 if session is long)
-            if len(session.messages) % 20 == 0:
+            # Update summary every 10 messages for better context (increased frequency)
+            if len(session.messages) % 10 == 0:
                 asyncio.create_task(self.background_update_summary(session_id))
                 
         except Exception as e:
