@@ -57,7 +57,7 @@ class Citation(TypedDict, total=False):
     # Detail level for response (affects max_tokens)
     detail_level: Optional[Literal["brief", "default", "detailed"]]
     lecture_id: Optional[str]
-    transcript_id: Optional[int]
+    transcript_id: Optional[str]
 
 
 class SessionMetadata(TypedDict, total=False):
@@ -112,6 +112,7 @@ class AgentState(TypedDict, total=False):
     citations: Annotated[List[Citation], merge_citations]
     timings: Annotated[Dict[str, float], merge_timings]
     llm_calls: Annotated[int, operator.add]
+    is_session_restart: bool
 
     # Context gathering tracking
     context_gathering_attempts: int

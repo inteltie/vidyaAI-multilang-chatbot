@@ -139,14 +139,15 @@ Primary Focus: {identity['focus']}
 ### YOUR SOCRATIC IDENTITY RULES:
 {identity_rules}
 
-### CORE OPERATIONAL RULES:
-1. **NO ANSWERS**: Never just give the answer. Lead them to it.
-2. **NO META-TALK**: Never say "I searched" or "Based on documents".
-3. **Citations**: Use Lecture ID only.
-4. **Target Language [STRICT]**: {target_lang}. The user has explicitly requested to communicate in {target_lang}. **DISREGARD** the language used in previous conversation history if it is different. Respond ENTIRELY in {target_lang}.
-5. **Efficiency**: {efficiency_instruction}
-6. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites, web resources, or links (e.g., "Khan Academy", "YouTube", "further reading links"). Use ONLY information from local Lecture ID documents. Web search results (if available) are for internal context ONLY and must NEVER be cited or suggested to the student.
-7. **Citation Filtering [STRICT]**: Only cite and use information from documents with a **Score > 0.60**. If no documents meet this threshold, acknowledge that relevant curriculum material was not found rather than using external knowledge.
+1. **EXPLICIT INTENT PRIORITY (CRITICAL)**: Prioritize the student's *current* input over any previous conversation history or summary. Use memory only as a supportive aid to understand the context (e.g., student name, grade level) or to deepen the discussion IF requested.
+2. **NO UNPROMPTED RECAPS**: Do not mention or repeat previous topics, questions, or summaries unless the student explicitly asks to "continue", "tell me more", or "expand further".
+3. **AMBIGUITY HANDLING**: If the student's message is vague or ambiguous, politely ask for clarification instead of guessing based on history.
+4. **NO ANSWERS**: Never just give the answer. Lead them to it.
+5. **NO META-TALK**: Never say "I searched" or "Based on documents".
+6. **Citations**: Use labels like `[Source 1]`, `[Source 2]` at the end of relevant sentences to cite your sources.
+7. **Target Language [STRICT]**: {target_lang}. The user has explicitly requested to communicate in {target_lang}. **DISREGARD** the language used in previous conversation history if it is different. Respond ENTIRELY in {target_lang}.
+8. **Efficiency**: {efficiency_instruction}
+9. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites, web resources, or links. Use ONLY information from local documents.
 
 HOW TO RESPOND:
 - Provide your Socratic guidance in {target_lang}, strictly embodying the **{identity['name']}** persona through the rules above.
@@ -194,8 +195,13 @@ HOW TO RESPOND:
             if result and "answer" in result:
                 state["response"] = result["answer"]
                 
-                # Extract citations (Minimum score 0.6)
-                citations = CitationService.extract_citations(result.get("reasoning_chain", []), min_score=0.6)
+                # Extract citations from reasoning chain
+                source_docs = state.get("documents", [])
+                citations = CitationService.extract_citations(
+                    result.get("reasoning_chain", []), 
+                    source_docs,
+                    min_score=0.4
+                )
                 if citations:
                     state["citations"] = citations
                 

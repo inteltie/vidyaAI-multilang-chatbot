@@ -10,18 +10,27 @@ class CitationService:
     """Service to parse and standardize citations from agent observations."""
 
     @staticmethod
-    def extract_citations(reasoning_chain: List[Dict[str, Any]], min_score: float = 0.0) -> List[Dict[str, Any]]:
+    def extract_citations(
+        reasoning_chain: List[Dict[str, Any]], 
+        source_documents: List[Any], 
+        min_score: float = 0.0
+    ) -> List[Dict[str, Any]]:
         """
-        Extract citations from retrieved documents in reasoning chain.
+        Extract citations by matching 'Source {i}' labels in observations back to source_documents.
         
         Args:
             reasoning_chain: List of agent reasoning steps (action/observation)
+            source_documents: The list of Document objects from the state (containing full metadata).
             min_score: Minimum relevance score to include a citation.
             
         Returns:
-            List of unique citation dictionaries with standardized fields.
+            List of unique citation dictionaries with full metadata.
         """
-        citations = []
+        if not source_documents:
+            return []
+
+        cited_doc_ids = set()
+        unique_citations = []
         
         for step in reasoning_chain:
             action = step.get("action")
@@ -30,95 +39,52 @@ class CitationService:
             if action == "retrieve_documents":
                 observation = step.get("observation", "")
                 
-                # Split by lines and parse
+                # Split by lines to find labels like "Source 1"
                 lines = observation.split("\n")
-                current_doc = {}
                 
                 for line in lines:
                     line = line.strip()
                     
-                    # Detect start of a new document (e.g., "1. [Score: 0.85]")
-                    if "Score:" in line and "[" in line and "]" in line:
-                        # Save previous document if valid
-                        if current_doc and "lecture_id" in current_doc:
-                            if current_doc.get("score", 0.0) >= min_score:
-                                citations.append({
-                                    "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
-                                    "score": current_doc.get("score", 0.0),
-                                    **current_doc
-                                })
-                            current_doc = {} # Reset
-                        
-                        # Start new document
+                    # Pattern: "Source {i} [Score: {score}]"
+                    if "Source" in line and "[Score:" in line:
                         try:
-                            score_str = line.split("Score:")[1].split("]")[0].strip()
-                            current_doc["score"] = float(score_str)
-                        except (ValueError, IndexError):
-                            current_doc["score"] = 0.0
+                            # Extract Index (e.g., "Source 1" -> 1)
+                            label_part = line.split("[")[0].strip() # "Source 1"
+                            idx_str = label_part.split("Source")[-1].strip()
+                            idx = int(idx_str)
                             
-                    # Field Extraction
-                    elif line.startswith("Lecture ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["lecture_id"] = val
-                    
-                    elif line.startswith("Transcript ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["transcript_id"] = val
-                    
-                    elif line.startswith("Chunk ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["chunk_id"] = val
-                    
-                    elif line.startswith("Subject ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["subject_id"] = val
-                    
-                    elif line.startswith("Topics:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["topics"] = val
-
-                    elif line.startswith("Chapter:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["chapter"] = val
-                    
-                    elif line.startswith("Class Name:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["class_name"] = val
-
-                    elif line.startswith("Class ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["class_id"] = val
-
-                    elif line.startswith("Teacher Name:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["teacher_name"] = val
-
-                    elif line.startswith("Teacher ID:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["teacher_id"] = val
-                    
-                    elif line.startswith("Subject:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val != "N/A": current_doc["subject"] = val
-                
-                # Append last document after loop
-                if current_doc and "lecture_id" in current_doc:
-                    if current_doc.get("score", 0.0) >= min_score:
-                        citations.append({
-                            "id": f"doc_{current_doc.get('lecture_id', 'unknown')}",
-                            "score": current_doc.get("score", 0.0),
-                            **current_doc
-                        })
+                            # Validate index (1-based from tool output)
+                            if 1 <= idx <= len(source_documents):
+                                doc = source_documents[idx-1]
+                                
+                                # Check score threshold
+                                score = doc.get("score", 0.0)
+                                if score >= min_score:
+                                    doc_id = doc.get("id")
+                                    if doc_id and doc_id not in cited_doc_ids:
+                                        cited_doc_ids.add(doc_id)
+                                        
+                                        meta = doc.get("metadata", {}) or {}
+                                        unique_citations.append({
+                                            "id": doc_id,
+                                            "score": score,
+                                            "lecture_id": str(meta.get("lecture_id")) if meta.get("lecture_id") is not None else None,
+                                            "transcript_id": str(meta.get("transcript_id")) if meta.get("transcript_id") is not None else None,
+                                            "chunk_id": str(meta.get("chunk_id")) if meta.get("chunk_id") is not None else None,
+                                            "subject": meta.get("subject"),
+                                            "subject_id": meta.get("subject_id"),
+                                            "topics": str(meta.get("topics")) if meta.get("topics") is not None else None,
+                                            "chapter": meta.get("chapter"),
+                                            "class_name": meta.get("class_name"),
+                                            "class_id": meta.get("class_id"),
+                                            "teacher_name": meta.get("teacher_name"),
+                                            "teacher_id": meta.get("teacher_id"),
+                                        })
+                        except (ValueError, IndexError, AttributeError):
+                            continue
         
-        # Deduplicate citations by lecture_id
-        seen = set()
-        unique_citations = []
-        for citation in citations:
-            key = citation.get("lecture_id")
-            if key and key not in seen:
-                seen.add(key)
-                unique_citations.append(citation)
-        
+        # Sort by score descending
+        unique_citations.sort(key=lambda x: x["score"], reverse=True)
         return unique_citations
 
 

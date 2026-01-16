@@ -124,18 +124,20 @@ Focus: {identity['focus']}
 ### YOUR OPERATIONAL IDENTITY RULES:
 {identity_rules}
 
-### CORE OPERATIONAL RULES:
-1. **NO META-TALK**: Never say "I searched" or "Based on documents".
-2. **Citations**: Use Lecture ID only.
-3. **Target Language [STRICT]**: {target_lang}.
-4. **Efficiency**: {efficiency_instruction}
-5. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites or links. Use ONLY information from local documents.
-6. **Citation Filtering [STRICT]**: Only cite and use information from documents with a **Score > 0.60**.
-7. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core information.
+1. **EXPLICIT INTENT PRIORITY (CRITICAL)**: Prioritize the student's *current* input over any previous conversation history or summary. Use memory only as a supportive aid to understand the context (e.g., student name, grade level) or to deepen the discussion IF requested.
+2. **NO UNPROMPTED RECAPS**: Do not mention or repeat previous topics, questions, or summaries unless the student explicitly asks to "continue", "tell me more", or "expand further".
+3. **AMBIGUITY HANDLING**: If the student's message is vague or ambiguous, politely ask for clarification instead of guessing based on history.
+4. **NO META-TALK**: Never say "I searched" or "Based on documents".
+5. **Citations**: Use labels like `[Source 1]`, `[Source 2]` at the end of relevant sentences to cite your sources.
+6. **Target Language [STRICT]**: {target_lang}.
+7. **Efficiency**: {efficiency_instruction}
+8. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites or links. Use ONLY information from local documents.
+9. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core information.
 {correction_instruction}
 
 HOW TO RESPOND:
 - Provide your response in {target_lang}, strictly embodying **{identity['name']}** through the rules above.
+- Cite sources using `[Source X]` format.
 - Stick to the **50-100 token limit** unless detail is specifically requested.
 """
         return prompt
@@ -199,8 +201,14 @@ HOW TO RESPOND:
             if result and "answer" in result:
                 state["response"] = result["answer"]
                 
-                # Extract citations from reasoning chain (Minimum score 0.6)
-                citations = CitationService.extract_citations(result.get("reasoning_chain", []), min_score=0.6)
+                # Extract citations from reasoning chain
+                # source_documents comes from state["documents"] (retrieved in RetrieveDocumentsNode)
+                source_docs = state.get("documents", [])
+                citations = CitationService.extract_citations(
+                    result.get("reasoning_chain", []), 
+                    source_docs,
+                    min_score=0.4
+                )
                 if citations:
                     state["citations"] = citations
                 

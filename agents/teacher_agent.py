@@ -99,7 +99,12 @@ class TeacherAgent:
             )
             
             # Extract citations once from reasoning chain
-            citations = CitationService.extract_citations(result.get("reasoning_chain", []))
+            source_docs = state.get("documents", [])
+            citations = CitationService.extract_citations(
+                result.get("reasoning_chain", []), 
+                source_docs,
+                min_score=0.4
+            )
             
             # Update state with results
             if result and "answer" in result:
@@ -177,12 +182,14 @@ Available Tools:
 
 CRITICAL RULES FOR TEACHER ASSISTANCE:
 
-1. **RAG-ONLY**: Answer ONLY from retrieved lecture content. NO general knowledge.
+1. **EXPLICIT INTENT PRIORITY (CRITICAL)**: Prioritize the user's *current* input over any previous conversation history or summary. Use memory only as a supportive aid to understand the context (analytical goals, detecting patterns) but do NOT start by re-playing past topics unprompted.
+2. **NO UNPROMPTED RECAPS**: Do not mention or repeat previous topics, questions, or summaries unless the user explicitly asks to "continue", "tell me more", or "expand further".
+3. **AMBIGUITY HANDLING**: If the query is vague or ambiguous, politely ask for clarification instead of guessing based on history.
+4. **RAG-ONLY**: Answer ONLY from retrieved lecture content. NO general knowledge.
    - **DIRECT ANSWERS ONLY**: Provide analysis directly. NEVER mention the retrieval process.
    - **SILENT FAILURE**: If no documents are found, NEVER say "no information found". Instead, ask a professional clarifying question about the analytical goal.
-   - **AMBIGUITY HANDLING**: If retrieval returns mixed results, DO NOT proceed. List detected contexts and ask for the "main objective".
-   - **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core analysis.
-   - If the query is ambiguous, ask clarifying questions.
+5. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core analysis.
+6. **Citations**: Use labels like `[Source 1]`, `[Source 2]` at the end of relevant sentences to cite your sources.
 
 3. **ANALYTICAL TONE**: 
    - Use professional, analytical language
@@ -226,18 +233,13 @@ Example 3 - Analytical Response (Coverage) (User Language: English):
 (After retrieval)
 DevOps Coverage Analysis:
 
-DevOps concepts were covered across multiple sessions, focusing on CI/CD basics, Docker containerization, and Kubernetes orchestration. The curriculum emphasizes the practical application of these tools in automating deployment pipelines.
+DevOps concepts were covered across multiple sessions, focusing on CI/CD basics [Source 1], Docker containerization [Source 2], and Kubernetes orchestration [Source 3]. The curriculum emphasizes the practical application of these tools in automating deployment pipelines.
 
-Total: 3 sessions, 7 topics covered
-Key concepts: CI/CD, Docker, Kubernetes, Automation
-
-[Citations: session_10, session_12, session_15]
+Key concepts: CI/CD, Docker, Kubernetes, Automation.
 
 Example 4 - Specific Question:
 (After retrieval)
-The amygdala is the brain structure mainly involved in processing fear and emotional responses. It is an almond-shaped structure sitting next to the hippocampus.
-
-[Citation: Lecture ID 1]
+The amygdala is the brain structure mainly involved in processing fear and emotional responses [Source 1]. It is an almond-shaped structure sitting next to the hippocampus.
 """
         return prompt
     

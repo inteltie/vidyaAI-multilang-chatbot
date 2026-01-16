@@ -124,10 +124,12 @@ class RetrieveDocumentsNode:
             citations.append({
                 "id": d.get("id", ""),
                 "score": d.get("score", 0.0),
-                "subject": meta.get("subject_id"),
-                "topics": meta.get("topics"),
+                "subject": meta.get("subject"),
+                "topics": str(meta.get("topics")) if meta.get("topics") is not None else None,
                 "class_id": meta.get("class_id"),
                 "lecture_id": str(meta.get("lecture_id")) if meta.get("lecture_id") is not None else None,
+                "transcript_id": str(meta.get("transcript_id")) if meta.get("transcript_id") is not None else None,
+                "chunk_id": str(meta.get("chunk_id")) if meta.get("chunk_id") is not None else None,
             })
         state["citations"] = citations
 

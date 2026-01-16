@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 import redis.asyncio as aioredis
@@ -24,17 +25,36 @@ class MemoryService:
         self._redis = redis_client
         self._llm = llm
         self._memory_token_limit = getattr(settings, "memory_token_limit", 2000)
+        self.SESSION_RESTART_THRESHOLD = 7200  # 2 hours in seconds
 
-    async def ensure_session(self, user_id: str, session_id: str) -> Tuple[ChatSession, List[Dict[str, str]], Optional[str]]:
+    async def ensure_session(self, user_id: str, session_id: str) -> Tuple[ChatSession, List[Dict[str, str]], Optional[str], bool]:
         """
         Ensure session exists, load summary, and prepare Redis buffer.
-        Returns: (session_object, redis_buffer_messages, summary)
+        Returns: (session_object, redis_buffer_messages, summary, is_restart)
         """
         # 1. Get or create MongoDB session
         session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        is_restart = False
+        
         if not session:
             session = ChatSession(session_id=session_id, user_id=user_id)
             await session.insert()
+        else:
+            # Check for restart condition: updated_at > threshold
+            if session.updated_at:
+                # updated_at might be offset-aware or naive depending on driver/data
+                # Standardize both to naive UTC for safe comparison
+                now = datetime.utcnow()
+                
+                # If session.updated_at is aware, convert to UTC and make naive
+                updated_at = session.updated_at
+                if updated_at.tzinfo is not None:
+                    updated_at = updated_at.astimezone(timezone.utc).replace(tzinfo=None)
+                
+                diff = (now - updated_at).total_seconds()
+                if diff > self.SESSION_RESTART_THRESHOLD and len(session.messages) > 0:
+                    is_restart = True
+                    logger.info("Session %s detected as restart (Inactivity: %.1fs)", session_id, diff)
         
         summary = session.summary
 
@@ -60,7 +80,7 @@ class MemoryService:
                 await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
                 await self._redis.expire(redis_key, 3600) # 1 hour TTL
 
-        return session, buffer, summary
+        return session, buffer, summary, is_restart
 
     async def get_context(self, session_id: str) -> Tuple[Optional[str], List[BaseMessage]]:
         """

@@ -278,6 +278,7 @@ class BackendApp:
                     "citations": [],
                     "llm_calls": 0,
                     "timings": {},
+                    "is_session_restart": False,
                 }
                 
                 # Store UI filters separately (only for RAG retrieval)

@@ -106,12 +106,12 @@ class RetrievalTool(Tool):
             return f"Error during retrieval: {str(exc)}"
 
     @staticmethod
-    def format_documents(docs: List[Document], min_score: float = 0.0) -> str:
+    def format_documents(docs: List[Document], min_score: float = 0.4) -> str:
         """Format documents for agent observation with minimal metadata."""
         if not docs:
             return "No documents found."
             
-        # Filter docs by score
+        # Filter docs by score (Code-level filtering)
         docs = [d for d in docs if d.get("score", 0.0) >= min_score]
         
         if not docs:
@@ -120,7 +120,8 @@ class RetrievalTool(Tool):
         result = f"Found {len(docs)} relevant documents (Top 5 shown):\n\n"
         for i, doc in enumerate(docs[:5], 1):
             text_content = doc.get("text", "")
-            # Only include Text and Score to avoid LLM distraction
+            # Strictly ONLY Text and Score to avoid LLM distraction
+            # Metadata is preserved in state["documents"] for final citation array
             result += f"Source {i} [Score: {doc.get('score', 0):.2f}]: {text_content}\n\n"
         
         if len(docs) > 5:
