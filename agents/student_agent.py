@@ -131,7 +131,7 @@ Focus: {identity['focus']}
 5. **Citations**: Use labels like `[Source 1]`, `[Source 2]` at the end of relevant sentences to cite your sources.
 6. **Target Language [STRICT]**: {target_lang}.
 7. **Efficiency**: {efficiency_instruction}
-8. **LOCAL KNOWLEDGE ONLY [STRICT]**: Never mention external websites or links. Use ONLY information from local documents.
+8. **NO EXTERNAL LINKS [MANDATORY]**: Never mention or link to external websites, platforms, or tools (e.g., Coursera, Khan Academy, Wikipedia, YouTube). Use ONLY the provided local information. 
 9. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core information.
 {correction_instruction}
 

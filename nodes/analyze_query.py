@@ -20,12 +20,13 @@ class AnalyzeQueryNode:
     into a single step/LLM call.
     """
 
-    def __init__(self, classifier: QueryClassifier, retriever=None) -> None:
+    def __init__(self, classifier: QueryClassifier, retriever: RetrieverService | None = None) -> None:
         self._classifier = classifier
         self._retriever = retriever
 
     async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
+        updates = {}
         
         query = state["query"]
         history = state.get("conversation_history", [])
@@ -49,16 +50,40 @@ class AnalyzeQueryNode:
         except Exception as e:
             logger.error("Query summarization failed: %s", e)
 
-        # Perform combined analysis
-        result: QueryClassification = await self._classifier.analyze(final_query, history)
+        # Phase 6: Speculative Parallelism
+        import asyncio
+        
+        # Start classification task
+        classifier_task = self._classifier.analyze(final_query, history)
+        
+        # Start speculative RAG only if it looks like an educational query (heuristics)
+        # Avoid speculative RAG for very short queries that are likely conversational
+        retrieval_task = None
+        is_likely_educational = len(final_query.split()) > 2 or any(kw in final_query.lower() for kw in ["how", "what", "why", "explain", "describe", "define"])
+        
+        if self._retriever and is_likely_educational:
+            logger.info("Triggering speculative RAG for query: %s", final_query[:50])
+            from models import QueryIntent
+            retrieval_task = self._retriever.retrieve(
+                query_en=final_query,
+                filters=state.get("request_filters"),
+                intent=state.get("intent", QueryIntent.CONCEPT_EXPLANATION)
+            )
+        
+        if retrieval_task:
+            result, speculative_docs = await asyncio.gather(classifier_task, retrieval_task)
+            # We'll store these in state for RetrieveDocumentsNode to pick up if valid
+            updates["speculative_documents"] = speculative_docs
+        else:
+            result = await classifier_task
         
         # Prepare updates
-        updates = {
+        updates.update({
             "query_en": result.translated_query,
             "query_type": result.query_type,
             "subjects": result.subjects,
             "llm_calls": 1,
-        }
+        })
         
         # Update language if user specifically switched it
         if result.response_language:
@@ -80,6 +105,10 @@ class AnalyzeQueryNode:
                 new_meta["lecture_id"] = result.lecture_id
             
             updates["session_metadata"] = new_meta
+            
+        # If we had a heuristic match, mark that we skipped the LLM
+        if result.confidence >= 1.0 and "Matched" in result.reasoning:
+            updates["llm_calls"] = 0
         
         duration = perf_counter() - start
         updates["timings"] = {"analyze_query": duration}

@@ -14,8 +14,7 @@ from typing import List, Dict, Any
 
 # Configuration
 BASE_URL = "http://localhost:8001"
-REDIS_URL = "redis://redis:6379"
-# Fallback for local run: REDIS_URL = "redis://localhost:6379"
+REDIS_URL = "redis://localhost:6379"
 USER_ID = "test_student_001"
 SESSION_ID = f"test_session_{uuid.uuid4().hex[:8]}"
 STUDENT_GRADE = "B"

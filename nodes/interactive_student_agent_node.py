@@ -35,6 +35,7 @@ class InteractiveStudentAgentNode:
             "citations": new_state.get("citations", []),
             "llm_calls": max(0, calls_made),
             "final_language": new_state.get("final_language"),
+            "is_correction": new_state.get("is_correction", False),
             "timings": {"interactive_student_agent": duration}
         }
 

@@ -205,7 +205,7 @@ class BackendApp:
             TeacherAgentNode,
         )
         
-        analyze_query_node = AnalyzeQueryNode(query_classifier)
+        analyze_query_node = AnalyzeQueryNode(query_classifier, retriever_service)
         retrieve_documents_node = RetrieveDocumentsNode(retriever_service)
         conversational_agent_node = ConversationalAgentNode(conversational_agent)
         student_agent_node = StudentAgentNode(student_agent)

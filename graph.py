@@ -149,22 +149,43 @@ class ChatbotGraphBuilder:
             },
         )
 
-        # 5. Validation: All educational agents go through groundedness_check
-        graph.add_edge("student_agent", "groundedness_check")
-        graph.add_edge("interactive_student_agent", "groundedness_check")
-        graph.add_edge("teacher_agent", "groundedness_check")
+        # 5. Parallel Validation and Translation for Educational Flow
+        # We run them in parallel to save time. 
+        # If Groundedness Check fails, we ignore the translation and loop back.
+        
+        # Branch point after educational agents
+        graph.add_node("branch_educational_validation", lambda state: {})
+        graph.add_edge("student_agent", "branch_educational_validation")
+        graph.add_edge("interactive_student_agent", "branch_educational_validation")
+        graph.add_edge("teacher_agent", "branch_educational_validation")
+        
+        # Parallel branches
+        graph.add_edge("branch_educational_validation", "groundedness_check")
+        graph.add_edge("branch_educational_validation", "translate_response_educational")
+        
+        # Join point (Pass-through)
+        graph.add_node("join_educational_validation", lambda state: {})
+        graph.add_edge("groundedness_check", "join_educational_validation")
+        
+        # translate_response_educational is a alias/wrapper for translate_response to avoid collision in graph if needed,
+        # but LangGraph allows multiple edges into the same node.
+        # We'll use a specific node for educational translation to verify logic.
+        graph.add_node("translate_response_educational", self._translate_response)
+        graph.add_edge("translate_response_educational", "join_educational_validation")
 
+        # Routing after both parallel tasks complete
         graph.add_conditional_edges(
-            "groundedness_check",
+            "join_educational_validation",
             self._route_after_validation,
             {
-                "pass": "translate_response",
+                "pass": "save_memory",
                 "fail": "route_educational_user",  # Self-correction loop
             }
         )
 
-        # 6. Finalization: Translation -> Save -> END
+        # 6. Finalization: Save -> END
         graph.add_edge("translate_response", "save_memory")
+        graph.add_edge("save_memory", END)
         graph.set_finish_point("save_memory")
 
         return graph

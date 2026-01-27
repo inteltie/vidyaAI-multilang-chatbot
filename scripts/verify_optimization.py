@@ -35,8 +35,8 @@ async def verify_optimizations():
         # Test heuristic directly
         heuristic = classifier._check_heuristics(query)
         if expected_type == "conversational":
-            if heuristic == "conversational":
-                print(f"✅ Heuristic: '{query}' -> {heuristic}")
+            if heuristic and heuristic.query_type == "conversational":
+                print(f"✅ Heuristic: '{query}' -> {heuristic.query_type} ({heuristic.reasoning})")
             else:
                 print(f"❌ Heuristic Failed: '{query}' -> {heuristic} (Expected: {expected_type})")
         else:
@@ -48,12 +48,12 @@ async def verify_optimizations():
     # 2. Test LLM Classification (Structured Output)
     print("\n--- Testing LLM Classification ---")
     llm_query = "explain photosynthesis"
-    result = await classifier.classify(llm_query, [])
-    print(f"Query: '{llm_query}' -> {result}")
-    if result == "curriculum_specific":
+    result = await classifier.analyze(llm_query, [])
+    print(f"Query: '{llm_query}' -> {result.query_type}")
+    if result.query_type == "curriculum_specific":
         print("✅ LLM Classification correct.")
     else:
-        print(f"❌ LLM Classification failed. Got: {result}")
+        print(f"❌ LLM Classification failed. Got: {result.query_type}")
 
     print("\n--- Verifying Context Parser ---")
     parser = ContextParser(llm)

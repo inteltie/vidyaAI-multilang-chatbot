@@ -11,9 +11,11 @@ An intelligent educational chatbot powered by LangGraph, designed to provide per
 - **Web Search Fallback**: Integrated web search for topics not covered in curriculum (internal context only)
 - **Proactive RAG**: Optimized retrieval with prefilled observations for faster response times
 - **Groundedness Validation**: Prevents hallucinations with automatic response validation and retry logic
-- **Citation System**: Automatic extraction and formatting of lecture citations with quality thresholds
-- **Multilingual Support**: Automatic language detection and translation for seamless cross-language communication
-- **Context-Aware**: Maintains conversation history and session context using Redis and MongoDB
+- **Citation System**: Rich metadata-aware citations (Lecture ID, Transcript ID, etc.) that are recovered at the service level to prevent LLM distraction.
+- **Conversation Restart Detection**: Automatically detects user return after a 2-hour inactivity period with warm, context-aware greetings.
+- **Intent-Driven Persona**: Human-like interaction that prioritizes explicit user intent over unprompted context re-injection.
+- **Hybrid Memory System**: Fast Redis hot-cache combined with persistent MongoDB long-term storage and summary generation.
+- **Multilingual Support**: Automatic language detection and translation for seamless cross-language communication.
 - **Scalable Design**: Built with FastAPI and containerized with Docker for easy deployment
 
 ## 🏗️ Architecture
@@ -22,12 +24,13 @@ An intelligent educational chatbot powered by LangGraph, designed to provide per
 
 The system uses a sophisticated LangGraph workflow with the following nodes:
 
-1. **Load Memory**: Retrieves conversation history from Redis/MongoDB
+1. **Load Memory**: Retrieves conversation history from Redis/MongoDB.
+   - **Inactivity Detection**: Checks if the session has been idle for > 2 hours. If so, flags `is_session_restart` for specialized greeting.
 2. **Analyze Query**: Merged optimization step that performs:
-   - Language detection and English translation
-   - Intent classification (conversational vs curriculum)
-   - Session context extraction (class, subject, lecture metadata)
-   - **Proactive RAG fetch** for high-quality prefilled observations
+   - Language detection and English translation.
+   - Intent classification (conversational vs curriculum).
+   - Session context extraction (class, subject, lecture metadata).
+   - **Proactive RAG fetch** for high-quality prefilled observations.
 3. **Agent Routing**: Intelligent routing based on `query_type` and `user_type`:
    - **Conversational Agent**: Handles greetings, small talk, acknowledgments (no RAG)
    - **Student Agent (Standard)**: Fact-first synthesis with grade-adaptive personas (A/B/C/D)
@@ -52,6 +55,9 @@ The system adapts teaching style based on student proficiency level:
 | **B** | The Structured Scholar (Default) | Balanced, logical flow | Clear definitions, standard academic structure |
 | **C** | The Helpful Neighbor | Simplicity, confidence building | Analogies, real-world examples, encouraging tone |
 | **D** | The Foundational Coach | Extreme simplicity, reassurance | Simple stories, no jargon, "You've got this!" framing |
+
+> [!NOTE]
+> **Intent Prioritization**: Regardless of grade, Vidya prioritizes explicit user intent. If you say "Hi", she says "Hello! How can I help?". If you say "Continue", she resumes the lesson. She never recaps context unless you ask.
 
 ### Technology Stack
 
@@ -230,9 +236,27 @@ POST /chat
 - `citations`: List of source documents used to generate the response
 - `llm_calls`: Number of LLM API calls made to generate this response
 
-## 🔧 Configuration
+## 🧩 Logic and Nuances
 
-All configuration is managed through environment variables and centralized in `config.py`. Key settings include:
+### 1. Hybrid Memory & Restart Logic
+Vidya uses a dual-layer memory system:
+- **Redis (Hot Cache)**: Stores the last 24 hours of activity for immediate access.
+- **MongoDB (Persistent)**: Stores the full history and a rolling **Conversation Summary**.
+- **The 2-Hour Window**: If a user returns after 2 hours of inactivity, `MemoryService` triggers a "Restart". Vidya will welcome you back warmly but won't impose the old context unless you prompt it.
+
+### 2. Rich Citation Logic (Metadata-Aware)
+To keep the LLM focused, we use a "Metadata Strip" pattern:
+- **LLM Observation**: The LLM only sees `Source 1 [Score: 0.95]: Text content...`. It never sees database IDs.
+- **Citation Recovery**: The `CitationService` matches these `Source X` labels back to the original database documents to recover rich metadata (Lecture ID, Transcript ID, Subject, etc.) for the final UI response.
+
+### 3. Socratic vs. standard mode
+- **Standard**: Vidya provides direct, synthesis-based answers.
+- **Interactive**: Vidya leads the student step-by-step, providing scaffolding and analogies rather than direct answers.
+
+### 4. Groundedness Guardian
+Every educational response is checked by a "Guardian" node. If the response isn't supported by the retrieved documents (hallucination) or the intent is ambiguous, Vidya will ask a clarifying question instead of risking a wrong answer.
+
+## 🔧 Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|

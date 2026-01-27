@@ -38,26 +38,45 @@ class RetrieveDocumentsNode:
         # Proactive Web Search trigger: If keywords detected, we start it PARALLEL with RAG
         needs_web_proactive = any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"])
         
-        # Define tasks
-        rag_task = self._retriever.retrieve(
-            query_en=query_en,
-            filters=clean_filters if clean_filters else None,
-            intent=intent
-        )
+        # Speculative RAG reuse logic
+        speculative_docs = state.get("speculative_documents")
+        can_use_speculative = False
         
-        web_task = None
-        if needs_web_proactive:
-            from tools.web_search_tool import WebSearchTool
-            logger.info("Triggering proactive web search in parallel with RAG...")
-            web_tool = WebSearchTool()
-            web_task = web_tool.execute(query=query_en)
+        if speculative_docs is not None:
+             # Logic: if query_en is basically the same as the one used for speculative RAG, reuse it.
+             # We can't easily check what query was used in AnalyzeQueryNode without storing it, 
+             # but we can assume it was the raw 'query' field.
+             raw_query = state.get("query", "")
+             if query_en.lower() == raw_query.lower() or (len(query_en) > 0 and query_en in raw_query):
+                 logger.info("Reusing speculative RAG results (queries match).")
+                 can_use_speculative = True
+             else:
+                 logger.info("Speculative RAG mismatch: raw='%s', analyzed='%s'. Re-fetching.", raw_query[:20], query_en[:20])
 
-        # Execute parallelized tasks
-        if web_task:
-            docs, web_results = await asyncio.gather(rag_task, web_task)
+        # Define tasks (or use speculative result)
+        if can_use_speculative:
+            docs = speculative_docs
+            web_results = None # We'll check for proactive web search below
         else:
-            docs = await rag_task
-            web_results = None
+            rag_task = self._retriever.retrieve(
+                query_en=query_en,
+                filters=clean_filters if clean_filters else None,
+                intent=intent
+            )
+            
+            web_task = None
+            if needs_web_proactive:
+                from tools.web_search_tool import WebSearchTool
+                logger.info("Triggering proactive web search in parallel with RAG...")
+                web_tool = WebSearchTool()
+                web_task = web_tool.execute(query=query_en)
+    
+            # Execute parallelized tasks
+            if web_task:
+                docs, web_results = await asyncio.gather(rag_task, web_task)
+            else:
+                docs = await rag_task
+                web_results = None
 
         state["prefilled_observations"] = []
         

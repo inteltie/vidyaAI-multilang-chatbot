@@ -30,14 +30,20 @@ class TranslateResponseNode:
             "timings": {"translate_response": duration}
         }
         
+        if not response:
+            return updates
+
+        # 1. Skip if already translated (e.g., by the Agent logic)
+        if state.get("final_language") == target_lang:
+            logger.info("Response already in target language (%s). Skipping translation.", target_lang)
+            return updates
+
+        # 2. Skip if already in English and target is English
         if target_lang == "en":
             updates["final_language"] = "en"
             return updates
 
-        if not response:
-            return updates
-
-        # Always try to translate if target_lang is not English.
+        # Always try to translate if target_lang is not English and not already marked as translated.
         logger.info("TranslateResponseNode: Ensuring response is in target language: %s", target_lang)
         translated = await self._translator.from_english(response, target_lang)
         

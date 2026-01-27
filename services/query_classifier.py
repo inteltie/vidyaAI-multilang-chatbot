@@ -48,31 +48,42 @@ class QueryClassifier:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
         
-        # Conversational keywords (only if they are the ONLY word/phrase)
+        # 1. Conversational keywords (only if they are the ONLY word/phrase)
         conversational_keywords = {
             "hi", "hello", "hey", "greetings",
             "thanks", "thank you", "thx", "cool", "ok", "okay", "got it",
-            "bye", "goodbye", "see ya"
+            "bye", "goodbye", "see ya", "nice", "great", "awesome", "yep", "yes", "no"
         }
         
-        if query_lower in conversational_keywords:
+        if query_lower in conversational_keywords or query_lower.rstrip("!?. ") in conversational_keywords:
             return QueryClassification(
                 query_type="conversational",
                 translated_query=query,
                 confidence=1.0,
-                reasoning="Matched conversational keyword heuristic."
+                reasoning="Matched short conversational keyword heuristic.",
+                subjects=["General"]
             )
             
-        # Check for vague help requests that should be conversational
-        if query_lower.startswith(("i need help", "can you help", "i need some help")):
-            vague_terms = ["topic", "something", "study", "studies", "question", "doubt"]
-            if any(term in query_lower for term in vague_terms) and len(query_lower.split()) < 10:
-                return QueryClassification(
-                    query_type="conversational",
-                    translated_query=query,
-                    confidence=0.9,
-                    reasoning="Matched vague help request heuristic."
-                )
+        # 2. Check for vague help requests or meta-queries
+        help_patterns = ["i need help", "can you help", "i need some help", "what can you do", "help me"]
+        if any(pattern in query_lower for pattern in help_patterns) and len(query_lower.split()) < 10:
+            return QueryClassification(
+                query_type="conversational",
+                translated_query=query,
+                confidence=0.9,
+                reasoning="Matched meta-help request heuristic.",
+                subjects=["General"]
+            )
+            
+        # 3. Simple acknowledgments
+        if query_lower in ["ok", "okay", "alright", "sure", "fine", "k"]:
+            return QueryClassification(
+                query_type="conversational",
+                translated_query=query,
+                confidence=1.0,
+                reasoning="Matched acknowledgment heuristic.",
+                subjects=["General"]
+            )
             
         return None
         

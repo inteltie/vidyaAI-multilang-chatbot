@@ -20,11 +20,16 @@ class LoadMemoryNode:
         user_session_id = state["user_session_id"]
         user_id = state["user_id"]
         
-        # Load session, buffer, summary, and restart flag
-        _, _, _, is_restart = await self._memory_service.ensure_session(user_id, user_session_id)
+        # Concurrently load session and context
+        import asyncio
+        ensure_task = self._memory_service.ensure_session(user_id, user_session_id)
+        context_task = self._memory_service.get_context(user_session_id)
         
-        # Get structured context (summary + token-trimmed messages)
-        summary, messages = await self._memory_service.get_context(user_session_id)
+        results = await asyncio.gather(ensure_task, context_task)
+        
+        # Unpack results
+        _, _, _, is_restart = results[0]
+        summary, messages = results[1]
         
         duration = perf_counter() - start
         
