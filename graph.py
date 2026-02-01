@@ -149,33 +149,22 @@ class ChatbotGraphBuilder:
             },
         )
 
-        # 5. Parallel Validation and Translation for Educational Flow
-        # We run them in parallel to save time. 
-        # If Groundedness Check fails, we ignore the translation and loop back.
+        # 5. Sequential Validation and Translation for Educational Flow
+        # This ensures the groundedness check validates the FINAL translated response.
         
-        # Branch point after educational agents
-        graph.add_node("branch_educational_validation", lambda state: {})
-        graph.add_edge("student_agent", "branch_educational_validation")
-        graph.add_edge("interactive_student_agent", "branch_educational_validation")
-        graph.add_edge("teacher_agent", "branch_educational_validation")
-        
-        # Parallel branches
-        graph.add_edge("branch_educational_validation", "groundedness_check")
-        graph.add_edge("branch_educational_validation", "translate_response_educational")
-        
-        # Join point (Pass-through)
-        graph.add_node("join_educational_validation", lambda state: {})
-        graph.add_edge("groundedness_check", "join_educational_validation")
-        
-        # translate_response_educational is a alias/wrapper for translate_response to avoid collision in graph if needed,
-        # but LangGraph allows multiple edges into the same node.
-        # We'll use a specific node for educational translation to verify logic.
         graph.add_node("translate_response_educational", self._translate_response)
-        graph.add_edge("translate_response_educational", "join_educational_validation")
-
-        # Routing after both parallel tasks complete
+        
+        # Link educational agents to translation
+        graph.add_edge("student_agent", "translate_response_educational")
+        graph.add_edge("interactive_student_agent", "translate_response_educational")
+        graph.add_edge("teacher_agent", "translate_response_educational")
+        
+        # After translation, run groundedness check
+        graph.add_edge("translate_response_educational", "groundedness_check")
+        
+        # Routing after validation completes
         graph.add_conditional_edges(
-            "join_educational_validation",
+            "groundedness_check",
             self._route_after_validation,
             {
                 "pass": "save_memory",

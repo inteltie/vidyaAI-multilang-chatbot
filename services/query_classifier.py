@@ -30,10 +30,6 @@ class QueryClassification(BaseModel):
     extracted_subject: Optional[str] = Field(None, description="Detailed subject name if mentioned")
     chapter: Optional[str] = Field(None, description="Chapter or topic name if mentioned")
     lecture_id: Optional[str] = Field(None, description="Specific lecture/session ID if mentioned")
-    response_language: Optional[str] = Field(
-        None, 
-        description="The language code (e.g., 'hi', 'gu', 'en') if the user explicitly asks for a specific language in this query or if they switch languages."
-    )
 
 
 class QueryClassifier:
@@ -134,8 +130,6 @@ Tasks:
    - extracted_subject: (e.g., "Algebra", "Organic Chemistry", "Middle Ages")
    - chapter: (e.g., "Quadratic Equations", "Chapter 5", "World War II")
    - lecture_id: (e.g., "session_12", "lecture_101", "76")
-6. **Language Switch Detection**: Check if the user specifically asks to change the response language (e.g., "Hindi mein samjhao", "Now answer in Gujarati", "Talk in English"). 
-   - If detected, return the ISO 639-1 language code (hi, gu, mr, en, etc.) in response_language.
 
 Conversation history:
 {history_text}

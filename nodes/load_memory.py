@@ -20,29 +20,11 @@ class LoadMemoryNode:
         user_session_id = state["user_session_id"]
         user_id = state["user_id"]
         
-        # Concurrently load session and context
-        import asyncio
-        ensure_task = self._memory_service.ensure_session(user_id, user_session_id)
-        context_task = self._memory_service.get_context(user_session_id)
-        
-        results = await asyncio.gather(ensure_task, context_task)
-        
-        # Unpack results
-        _, _, _, is_restart = results[0]
-        summary, messages = results[1]
+        # Single DB/Redis pass to get history and context
+        updates = await self._memory_service.load_session_full(user_id, user_session_id)
         
         duration = perf_counter() - start
-        
-        # Prepare updates
-        updates = {
-            "conversation_history": messages,
-            "is_session_restart": is_restart,
-            "timings": {"load_memory": duration}
-        }
-        
-        if summary:
-            # Metadata merge logic in ParseSessionContextNode will handle this
-            updates["session_metadata"] = {"summary": summary}
+        updates["timings"] = {"load_memory": duration}
             
         return updates
 

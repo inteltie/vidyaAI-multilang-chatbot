@@ -26,6 +26,20 @@ class MemoryService:
         self._llm = llm
         self._memory_token_limit = getattr(settings, "memory_token_limit", 2000)
         self.SESSION_RESTART_THRESHOLD = 7200  # 2 hours in seconds
+        self._tokenizer_warmed = False
+
+    async def warmup(self):
+        """Pre-load tiktoken encodings to avoid cold-start delays on first use."""
+        if self._tokenizer_warmed:
+            return
+        try:
+            logger.info("Warming up tokenizer...")
+            # This triggers the download/loading of the bpe files
+            await asyncio.to_thread(self._llm.get_num_tokens, "Warmup text for tiktoken.")
+            self._tokenizer_warmed = True
+            logger.info("Tokenizer warmup complete.")
+        except Exception as e:
+            logger.warning(f"Tokenizer warmup failed: {e}")
 
     async def ensure_session(self, user_id: str, session_id: str) -> Tuple[ChatSession, List[Dict[str, str]], Optional[str], bool]:
         """
@@ -202,6 +216,78 @@ class MemoryService:
             
         except Exception as e:
             logger.error(f"Failed to update summary for session {session_id}: {e}")
+
+    async def load_session_full(self, user_id: str, session_id: str) -> Dict[str, Any]:
+        """
+        Optimized single-pass session load: Returns everything needed for LoadMemoryNode.
+        Avoids redundant DB calls.
+        """
+        # 1. Get or create MongoDB session (Single DB Hit)
+        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        is_restart = False
+        
+        if not session:
+            session = ChatSession(session_id=session_id, user_id=user_id)
+            await session.insert()
+            buffer = []
+            summary = None
+        else:
+            # Check for restart condition
+            if session.updated_at:
+                now = datetime.utcnow()
+                updated_at = session.updated_at
+                if updated_at.tzinfo is not None:
+                    updated_at = updated_at.astimezone(timezone.utc).replace(tzinfo=None)
+                
+                diff = (now - updated_at).total_seconds()
+                if diff > self.SESSION_RESTART_THRESHOLD and len(session.messages) > 0:
+                    is_restart = True
+                    logger.info("Session %s detected as restart (Inactivity: %.1fs)", session_id, diff)
+            
+            summary = session.summary
+
+            # 2. Load Redis buffer
+            redis_key = f"chat:{session_id}:buffer"
+            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+            
+            if raw_msgs:
+                buffer = [json.loads(m) for m in raw_msgs]
+                # Fix legacy key if present
+                for msg in buffer:
+                    if "content" not in msg and "text" in msg:
+                        msg["content"] = msg.pop("text")
+            else:
+                # Seed Redis from DB if buffer is empty
+                recent_msgs = session.messages[-settings.memory_buffer_size:]
+                buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
+                if buffer:
+                    await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
+                    await self._redis.expire(redis_key, 3600)
+
+        # 3. Convert to BaseMessage and Trim
+        messages: List[BaseMessage] = []
+        for m in buffer:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
+
+        trimmed_history = trim_messages(
+            messages,
+            max_tokens=self._memory_token_limit,
+            strategy="last",
+            token_counter=self._llm,
+            start_on="human",
+            include_system=False,
+        )
+
+        return {
+            "conversation_history": trimmed_history,
+            "is_session_restart": is_restart,
+            "session_metadata": {"summary": summary} if summary else {}
+        }
 
     async def get_history(self, session_id: str) -> List[ConversationTurn]:
         """Get history from Redis buffer (for compatibility)."""

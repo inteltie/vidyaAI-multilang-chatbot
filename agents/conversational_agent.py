@@ -38,6 +38,10 @@ class ConversationalAgent:
                 role = "STUDENT" if m.type == "human" else "VIDYA"
                 history_text += f"{role}: {m.content}\n"
             
+            
+            # Check if this is truly the first interaction
+            has_history = len(history) > 0
+            
             prompt = (
                 f"You are Vidya, a friendly and helpful educational assistant. "
                 f"Respond naturally to the student's message. IMPORTANT: Use the history below to see if the student shared their name and use it.\n"
@@ -48,7 +52,7 @@ class ConversationalAgent:
                 f"Response Guidelines:\n"
                 f"- Be warm and personalized.\n"
                 f"- If the student shared their name earlier, use it.\n"
-                f"- If the message is a greeting (like 'hi', 'hello') or a session restart: DO NOT recap previous topics or questions unless the student explicitly asks. Instead, ask 'How can I help you today?' or 'What would you like to discuss?'.\n"
+                f"- {'CRITICAL: This is MID-CONVERSATION (history exists). DO NOT greet with Hello/Hi/Namaste. Just respond naturally to their message.' if has_history else 'This is the FIRST message. Greet warmly and ask how you can help.'}\n"
                 f"- Keep the response brief and encouraging (under 100 tokens)."
             )
             resp = await self._llm.ainvoke(prompt)

@@ -111,12 +111,6 @@ class TeacherAgent:
                 state["response"] = result["answer"]
                 state["citations"] = citations
                 state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
-                
-                # If the agent generated the response in the target language (and it's not the fallback),
-                # mark it as translated so we skip the translation node.
-                if target_lang != "en" and result["answer"] != FALLBACK_MESSAGE:
-                    state["is_translated"] = True
-                    state["final_language"] = target_lang
             else:
                 citations = []
             

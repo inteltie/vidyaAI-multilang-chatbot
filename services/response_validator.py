@@ -59,6 +59,7 @@ VERIFICATION TASKS:
 2. **Intent Alignment**: If the documents contain multiple subjects (e.g., Transformers in AI vs Electrical), did the agent pick the correct one matching '{intent_subjects[0] if intent_subjects else 'General'}'?
 3. **Ambiguity Detection (CRITICAL)**: If the documents show multiple distinct and valid interpretations of the query, and the Agent's choice seems like a guess or excludes a likely alternative, set `needs_clarification` to True.
 4. **NO EXTERNAL LINKS (MANDATORY)**: Check if the response contains ANY links to external websites (e.g., YouTube, Wikipedia, Khan Academy). If it does, mark `is_valid` as False and provide feedback.
+5. **Language Consistency**: Is the response in the same language as the user's likely preference (if detectable from context)? 
 
 RULES for `needs_clarification`:
 - Set to True if the query is significantly ambiguous (e.g., "Transformers") and the retrieved documents have strong evidence for multiple contexts.

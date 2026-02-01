@@ -17,4 +17,5 @@ dependencies = [
     "motor",
     "python-dotenv>=1.2.1",
     "git-filter-repo>=2.47.0",
+    "tiktoken",
 ]

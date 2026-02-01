@@ -206,10 +206,6 @@ HOW TO RESPOND:
                     state["citations"] = citations
                 
                 state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
-                
-                # Mark as translated if not English
-                if target_lang != "en" and result["answer"] != FALLBACK_MESSAGE:
-                    state["final_language"] = target_lang
             else:
                 state["citations"] = []
             

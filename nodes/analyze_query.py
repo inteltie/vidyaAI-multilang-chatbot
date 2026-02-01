@@ -85,10 +85,10 @@ class AnalyzeQueryNode:
             "llm_calls": 1,
         })
         
-        # Update language if user specifically switched it
-        if result.response_language:
-            updates["language"] = result.response_language
-            updates["detected_language"] = result.response_language
+        
+        # Language is ALWAYS from the request - no AI overrides
+        # detected_language is used internally to ensure agents work in English
+        updates["detected_language"] = state.get("language", "en")
         
         # Session metadata extraction
         if result.query_type != "conversational":

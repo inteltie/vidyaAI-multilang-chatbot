@@ -114,6 +114,36 @@ class BackendApp:
                     await asyncio.sleep(2**i)
 
             self._graph = self._build_graph()
+            
+            # -- WARMUP STEP --
+            try:
+                logger.info("Performing service warmup...")
+                warmup_start = perf_counter()
+                
+                # 1. Warm up tokenizer (MemoryService)
+                # We need access to memory_service. We can get it from the graph or by building it here.
+                # To keep it simple, we'll build a temporary one or refactor _build_graph.
+                # Let's just trigger a dummy call through the LLM used in the graph.
+                llm = ChatOpenAI(
+                    model=self._settings.model_name,
+                    api_key=self._settings.openai_api_key,
+                )
+                from services import MemoryService, RetrieverService
+                temp_mem = MemoryService(self._redis_client, llm)
+                temp_retriever = RetrieverService(self._settings)
+                
+                await asyncio.gather(
+                    temp_mem.warmup(),
+                    # 2. Warm up Embeddings
+                    asyncio.to_thread(temp_retriever._embeddings.embed_query, "Warmup"),
+                    # 3. Warm up LLM
+                    llm.ainvoke("hi")
+                )
+                
+                logger.info("Service warmup completed in %.3fs", perf_counter() - warmup_start)
+            except Exception as e:
+                logger.warning(f"Service warmup encountered an issue: {e}")
+
             logger.info("LangGraph compiled and application started.")
             
             yield
@@ -312,7 +342,13 @@ class BackendApp:
                 ) from exc
 
             message = final_state.get("response", "")
-            intent = final_state.get("intent", QueryIntent.CONCEPT_EXPLANATION).value
+            
+            # Map query_type to intent for the response
+            query_type = final_state.get("query_type", "curriculum_specific")
+            if query_type == "conversational":
+                intent = "conversational"
+            else:
+                intent = final_state.get("intent", QueryIntent.CONCEPT_EXPLANATION).value
             language = final_state.get(
                 "final_language", final_state.get("detected_language", request.language)
             )
