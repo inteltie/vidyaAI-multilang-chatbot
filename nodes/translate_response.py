@@ -40,10 +40,13 @@ class TranslateResponseNode:
             logger.info("Response already in target language (%s). Skipping translation.", target_lang)
             return updates
 
-        # 2. Skip if already in English and target is English
+        # 2. Skip if target is English (no translation needed)
         if target_lang == "en":
             updates["final_language"] = "en"
             return updates
+
+        # Always translate to non-English target languages
+        # (Agents work in English internally, so response is always in English)
 
         # Always try to translate if target_lang is not English and not already marked as translated.
         logger.info("TranslateResponseNode: Ensuring response is in target language: %s", target_lang)

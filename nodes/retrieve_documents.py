@@ -95,10 +95,11 @@ class RetrieveDocumentsNode:
             })
             
             # PROACTIVE SUFFICIENCY ASSESSMENT
+            # Adjusted thresholds to reduce unnecessary web searches
             top_score = docs[0].get("score", 0)
-            if top_score > 0.85:
+            if top_score > 0.65:
                 state["rag_quality"] = "high"
-            elif top_score > 0.7:
+            elif top_score > 0.45:
                 state["rag_quality"] = "medium"
             else:
                 state["rag_quality"] = "low"
