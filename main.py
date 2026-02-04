@@ -96,12 +96,12 @@ class BackendApp:
             # MongoDB initialization
             for i in range(5):
                 try:
-                    client = AsyncIOMotorClient(
+                    self._mongo_client = AsyncIOMotorClient(
                         self._settings.mongo_uri,
                         serverSelectionTimeoutMS=5000
                     )
                     await init_beanie(
-                        database=client[self._settings.mongo_db_name],
+                        database=self._mongo_client[self._settings.mongo_db_name],
                         document_models=[ChatSession]
                     )
                     logger.info("MongoDB connected and Beanie initialized.")
@@ -152,7 +152,11 @@ class BackendApp:
             logger.info("Shutting down application...")
             if self._redis_client:
                 await self._redis_client.aclose()
-            logger.info("Redis client closed.")
+                logger.info("Redis client closed.")
+            
+            if hasattr(self, "_mongo_client") and self._mongo_client:
+                self._mongo_client.close()
+                logger.info("MongoDB client closed.")
         
         app = FastAPI(
             title="VidyaAI Educational Chatbot",
@@ -179,6 +183,7 @@ class BackendApp:
             api_key=self._settings.openai_api_key,
             temperature=0.0,
             max_tokens=self._settings.max_tokens_default,  # Default token limit
+            max_retries=1,  # Reduced retries for stability
         )
         
         # LLM for validation (Fast and efficient for groundedness checks)
@@ -187,6 +192,7 @@ class BackendApp:
             api_key=self._settings.openai_api_key,
             temperature=0.0,
             max_tokens=self._settings.max_tokens_default,
+            max_retries=1,
         )
 
         # Services
@@ -285,6 +291,28 @@ class BackendApp:
             responses={500: {"model": ErrorResponse}},
         )
         async def chat_endpoint(request: ChatRequest, graph=Depends(self._get_graph))  -> ChatResponse:
+            # 1. Enforce single graph execution per session (Stability Phase 1 - Distributed)
+            session_id = request.user_session_id
+            lock_key = f"lock:chat:{session_id}"
+            lock_acquired = False
+            
+            try:
+                if self._redis_client:
+                    # Use SET with NX=True and EX=300 (5 minutes) for a distributed lock
+                    is_locked = await self._redis_client.set(lock_key, "locked", nx=True, ex=300)
+                    
+                    if not is_locked:
+                        logger.warning("Session %s is already being processed (Redis lock active). Rejecting duplicate.", session_id)
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="This session is already being processed by another worker. Please wait.",
+                        )
+                    lock_acquired = True
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Redis distributed lock failed (Degraded Mode): {e}. Proceeding without lock.")
+            
             try:
                 # Initialize state
                 state: AgentState = {
@@ -318,20 +346,51 @@ class BackendApp:
 
                 # Add timeout to prevent indefinite blocking
                 graph_start = perf_counter()
-                final_state: AgentState = await asyncio.wait_for(
-                    graph.ainvoke(state), # Use the new 'state' variable
-                    timeout=60.0  # 60 second timeout
-                )
+                try:
+                    final_state: AgentState = await asyncio.wait_for(
+                        graph.ainvoke(state),
+                        timeout=60.0  # 60 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("Graph execution timed out after 60 seconds")
+                    raise HTTPException(
+                        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                        detail="Request timed out. Please try again.",
+                    )
+                
                 graph_duration = perf_counter() - graph_start
-                state = final_state # Ensure timings are from final_state
-                state["timings"]["total_graph"] = graph_duration
+                final_state["timings"]["total_graph"] = graph_duration
                 logger.info("Total graph execution took %.3f seconds", graph_duration)
-            except asyncio.TimeoutError:               
-                logger.error("Graph execution timed out after 60 seconds")
-                raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail="Request timed out. Please try again.",
+
+                message = final_state.get("response", "")
+                
+                # Map query_type to intent for the response
+                query_type = final_state.get("query_type", "curriculum_specific")
+                if query_type == "conversational":
+                    intent = "conversational"
+                else:
+                    intent = final_state.get("intent", QueryIntent.CONCEPT_EXPLANATION).value
+                
+                language = final_state.get(
+                    "final_language", final_state.get("detected_language", request.language)
                 )
+                citations = final_state.get("citations", []) or []
+                timings = final_state.get("timings", {}) or {}
+                llm_calls = int(final_state.get("llm_calls", 0) or 0)
+
+                # Log per-step timings to the server log
+                for step, duration in sorted(timings.items()):
+                    logger.info("timing step=%s duration=%.3fs", step, duration)
+
+                return ChatResponse(
+                    user_session_id=request.user_session_id,
+                    message=message,
+                    intent=intent,
+                    language=language,
+                    citations=citations,
+                    llm_calls=llm_calls,
+                )
+
             except HTTPException:
                 raise
             except Exception as exc:  # pragma: no cover - defensive
@@ -340,36 +399,13 @@ class BackendApp:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An internal error occurred while processing the request.",
                 ) from exc
-
-            message = final_state.get("response", "")
-            
-            # Map query_type to intent for the response
-            query_type = final_state.get("query_type", "curriculum_specific")
-            if query_type == "conversational":
-                intent = "conversational"
-            else:
-                intent = final_state.get("intent", QueryIntent.CONCEPT_EXPLANATION).value
-            language = final_state.get(
-                "final_language", final_state.get("detected_language", request.language)
-            )
-            citations = final_state.get("citations", []) or []
-            timings = final_state.get("timings", {}) or {}
-            llm_calls = int(final_state.get("llm_calls", 0) or 0)
-
-            # Log per-step timings to the server log (visible in terminal), not in the API payload.
-            for step, duration in sorted(timings.items()):
-                logger.info("timing step=%s duration=%.3fs", step, duration)
-
-            # Skip appending human-readable citation summary to keep response clean (requested by user)
-            
-            return ChatResponse(
-                user_session_id=request.user_session_id,
-                message=message,
-                intent=intent,
-                language=language,
-                citations=citations,
-                llm_calls=llm_calls,
-            )
+            finally:
+                # Always release the lock if it was acquired
+                if lock_acquired:
+                    try:
+                        await self._redis_client.delete(lock_key)
+                    except Exception:
+                        pass
             
 
 

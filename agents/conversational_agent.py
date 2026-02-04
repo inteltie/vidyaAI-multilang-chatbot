@@ -42,15 +42,18 @@ class ConversationalAgent:
             # Check if this is truly the first interaction
             has_history = len(history) > 0
             
+            target_lang = state.get("language", "en")
             prompt = (
                 f"You are Vidya, a friendly and helpful educational assistant. "
-                f"Respond naturally to the student's message. IMPORTANT: Use the history below to see if the student shared their name and use it.\n"
+                f"Respond naturally to the student's message in **{target_lang}**. "
+                f"IMPORTANT: Use the history below to see if the student shared their name and use it.\n"
                 f"{'NOTICE: This is a returning student after some time away. Welcome them back warmly.' if is_restart else ''}\n\n"
                 f"Conversation Summary: {summary}\n"
                 f"Recent Interaction History:\n{history_text}\n"
                 f"Latest Message from Student: {state['query']}\n\n"
                 f"Response Guidelines:\n"
                 f"- Be warm and personalized.\n"
+                f"- Your response MUST be in **{target_lang}**.\n"
                 f"- If the student shared their name earlier, use it.\n"
                 f"- {'CRITICAL: This is MID-CONVERSATION (history exists). DO NOT greet with Hello/Hi/Namaste. Just respond naturally to their message.' if has_history else 'This is the FIRST message. Greet warmly and ask how you can help.'}\n"
                 f"- Keep the response brief and encouraging (under 100 tokens)."

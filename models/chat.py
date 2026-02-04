@@ -24,6 +24,7 @@ class ChatSession(Document):
     title: Optional[str] = None
     summary: Optional[str] = None
     messages: List[ChatMessage] = []
+    is_summarizing: bool = False
     created_at: datetime = Field(default_factory=get_ist_now)
     updated_at: datetime = Field(default_factory=get_ist_now)
 

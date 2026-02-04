@@ -58,7 +58,9 @@ VERIFICATION TASKS:
 1. **Groundedness**: Is the answer supported by the provided documents? 
 2. **Intent Alignment**: If the documents contain multiple subjects (e.g., Transformers in AI vs Electrical), did the agent pick the correct one matching '{intent_subjects[0] if intent_subjects else 'General'}'?
 3. **Ambiguity Detection (CRITICAL)**: If the documents show multiple distinct and valid interpretations of the query, and the Agent's choice seems like a guess or excludes a likely alternative, set `needs_clarification` to True.
-4. **NO EXTERNAL LINKS (MANDATORY)**: Check if the response contains ANY links to external websites (e.g., YouTube, Wikipedia, Khan Academy). If it does, mark `is_valid` as False and provide feedback.
+4. **NO EXTERNAL LINKS (MANDATORY)**: Check if the response contains ANY links to external websites (e.g., [Google](https://google.com), https://wikipedia.org). 
+    - **STRICT EXCEPTION**: Phrases like "sources provided", "retrieved documents", or citations like `[1]`, `[2]` are NOT links and MUST be allowed.
+    - If the response contains actual URLs or clickable external links, mark `is_valid` as False and provide feedback exactly as "REMOVE_LINKS".
 5. **Language Consistency**: Is the response in the same language as the user's likely preference (if detectable from context)? 
 
 RULES for `needs_clarification`:
@@ -66,7 +68,7 @@ RULES for `needs_clarification`:
 - Provide a `clarification_question` that briefly describes the detected contexts and asks the user which one they want (e.g., "I found information on both electrical transformers and neural networks. Which one should I explain?").
 
 RETRY FEEDBACK:
-- If `needs_clarification` is False and `is_valid` is False, provide `feedback` to fix the hallucination or remove external links.
+- If `needs_clarification` is False and `is_valid` is False, provide `feedback` to fix the hallucination. If the only issue is external links, EXACTLY use "REMOVE_LINKS" as feedback.
 """
 
         try:

@@ -50,32 +50,30 @@ class AnalyzeQueryNode:
         except Exception as e:
             logger.error("Query summarization failed: %s", e)
 
-        # Phase 6: Speculative Parallelism
+        # Phase 6: Sequential Analysis (Speculative RAG disabled for stability)
         import asyncio
-        
-        # Start classification task
-        classifier_task = self._classifier.analyze(final_query, history)
-        
-        # Start speculative RAG only if it looks like an educational query (heuristics)
-        # Avoid speculative RAG for very short queries that are likely conversational
-        retrieval_task = None
-        is_likely_educational = len(final_query.split()) > 2 or any(kw in final_query.lower() for kw in ["how", "what", "why", "explain", "describe", "define"])
-        
-        if self._retriever and is_likely_educational:
-            logger.info("Triggering speculative RAG for query: %s", final_query[:50])
-            from models import QueryIntent
-            retrieval_task = self._retriever.retrieve(
-                query_en=final_query,
-                filters=state.get("request_filters"),
-                intent=state.get("intent", QueryIntent.CONCEPT_EXPLANATION)
+        try:
+            # Classification task with 15s timeout
+            result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("Query classification timed out after 15s")
+            from services.query_classifier import QueryClassification
+            result = QueryClassification(
+                query_type="curriculum_specific",
+                translated_query=final_query,
+                confidence=0.0,
+                reasoning="Fallback due to timeout",
+                subjects=["General"]
             )
-        
-        if retrieval_task:
-            result, speculative_docs = await asyncio.gather(classifier_task, retrieval_task)
-            # We'll store these in state for RetrieveDocumentsNode to pick up if valid
-            updates["speculative_documents"] = speculative_docs
-        else:
-            result = await classifier_task
+        except Exception as e:
+            logger.error("Query classification failed: %s", e)
+            from services.query_classifier import QueryClassification
+            result = QueryClassification(
+                query_type="curriculum_specific",
+                translated_query=final_query,
+                confidence=0.0,
+                reasoning=f"Fallback due to error: {e}"
+            )
         
         # Prepare updates
         updates.update({

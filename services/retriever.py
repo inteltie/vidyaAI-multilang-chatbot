@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -49,6 +50,7 @@ class RetrieverService:
             api_key=settings.openai_api_key,
             # Match the 1536-dimension Pinecone index using the large embedding model.
             dimensions=1536,
+            max_retries=1, # Reduced retries for stability
         )
         pc = Pinecone(api_key=settings.pinecone_api_key)
         # Type is provided by the Pinecone client; we don't depend on it here.
@@ -67,11 +69,29 @@ class RetrieverService:
             self._bm25_encoder = None
 
     async def _embed(self, text: str) -> List[float]:
-        """Compute dense embedding for the query."""
-        # LangChain embeddings are sync today; run in thread executor if needed.
-        from anyio.to_thread import run_sync
+        """Compute dense embedding for the query with Redis caching."""
+        from services.cache_service import CacheService
+        import hashlib
 
-        return await run_sync(self._embeddings.embed_query, text)
+        # Generate deterministic cache key
+        text_hash = hashlib.sha256(text.lower().strip().encode()).hexdigest()
+        cache_key = f"embed:{self._embeddings.model}:{text_hash}"
+
+        # Try cache first
+        cached_vector = await CacheService.get(cache_key)
+        if cached_vector:
+            logger.info("Found embedding in cache for: %s", text[:30])
+            return cached_vector
+
+        # LangChain embeddings are sync today; run in thread executor
+        from anyio.to_thread import run_sync
+        
+        vector = await run_sync(self._embeddings.embed_query, text)
+        
+        # Save to cache (TTL 24 hours for embeddings)
+        await CacheService.set(cache_key, vector, ttl=86400)
+        
+        return vector
 
     async def retrieve(
         self,
@@ -80,24 +100,29 @@ class RetrieverService:
         intent: QueryIntent = QueryIntent.CONCEPT_EXPLANATION,
     ) -> List[Document]:
         """
-        Retrieve relevant documents using hybrid search.
-        
-        Args:
-            query_en: English query text
-            class_level: Optional class/batch filter (from UI)
-            subject: Optional subject filter (from UI)
-            chapter: Optional chapter filter (from UI)
-            lecture_id: Optional lecture session ID filter (from UI)
-            intent: Query intent for weighting
+        Retrieve relevant documents using hybrid search with result caching.
         """
         start_time = time.time()
+        from services.cache_service import CacheService
+        import hashlib
+        import json
+
+        # 1. Check result cache first (Phase 3: Cost & Scale)
+        filter_str = json.dumps(filters or {}, sort_keys=True)
+        retrieval_hash = hashlib.sha256(f"{query_en.lower().strip()}||{filter_str}||{intent.value}".encode()).hexdigest()
+        retrieval_cache_key = f"rag_res:{retrieval_hash}"
         
-        # Generate dense embedding
+        cached_docs = await CacheService.get(retrieval_cache_key)
+        if cached_docs:
+            logger.info("🎯 Found Pinecone results in cache for query: %s", query_en[:30])
+            # CacheService returns deserialized JSON (list of dicts)
+            return cached_docs
+
+        # 2. Generate dense embedding (with its own cache)
         embed_start = time.time()
         try:
             dense = await self._embed(query_en)
             embed_time = time.time() - embed_start
-            logger.info("⏱️  Embedding generation took %.3f seconds", embed_time)
         except Exception as exc:  # pragma: no cover
             logger.warning("Embedding failed: %s", exc)
             return []
@@ -167,7 +192,7 @@ class RetrieverService:
             try:
                 # BM25Encoder.encode_queries returns a list of {"indices": [...], "values": [...]}
                 logger.debug("Query passed to sparse encoder: %s", [query_en])
-                sparse_vecs = self._bm25_encoder.encode_queries([query_en])
+                sparse_vecs = await asyncio.to_thread(self._bm25_encoder.encode_queries, [query_en])
                 if sparse_vecs:
                     sparse_vector = sparse_vecs[0]
                 sparse_time = time.time() - sparse_start
@@ -204,7 +229,7 @@ class RetrieverService:
         # Query Pinecone
         pinecone_start = time.time()
         try:
-            res = self._index.query(**query_kwargs)
+            res = await asyncio.to_thread(self._index.query, **query_kwargs)
             pinecone_time = time.time() - pinecone_start
             logger.info("⏱️  Pinecone query took %.3f seconds", pinecone_time)
             # logger.info("Pinecone query result: %s", res)
@@ -228,6 +253,10 @@ class RetrieverService:
         total_time = time.time() - start_time
         logger.info("🎯 Vector DB retrieval completed in %.3f seconds (found %d documents)", total_time, len(documents))
         
+        # Save to cache (Phase 3: Cost & Scale)
+        if documents:
+            await CacheService.set(retrieval_cache_key, documents, ttl=3600)
+            
         return documents
 
 

@@ -74,25 +74,30 @@ class MemoryService:
 
         # 2. Check Redis buffer
         redis_key = f"chat:{session_id}:buffer"
-        buffer_len = await self._redis.llen(redis_key)
-
-        if buffer_len > 0:
-            # Load from Redis
-            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
-            buffer = []
-            for m in raw_msgs:
-                msg = json.loads(m)
-                if "content" not in msg and "text" in msg:
-                    msg["content"] = msg.pop("text")
-                buffer.append(msg)
-        else:
-            # Rebuild from MongoDB (seed Redis)
+        buffer = []
+        try:
+            buffer_len = await self._redis.llen(redis_key)
+            if buffer_len > 0:
+                # Load from Redis
+                raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+                for m in raw_msgs:
+                    msg = json.loads(m)
+                    if "content" not in msg and "text" in msg:
+                        msg["content"] = msg.pop("text")
+                    buffer.append(msg)
+            else:
+                # Rebuild from MongoDB (seed Redis)
+                recent_msgs = session.messages[-settings.memory_buffer_size:]
+                buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
+                
+                if buffer:
+                    await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
+                    await self._redis.expire(redis_key, 3600) # 1 hour TTL
+        except Exception as e:
+            logger.warning(f"Redis fallback in ensure_session for {session_id}: {e}")
+            # Fallback: Load directly from MongoDB
             recent_msgs = session.messages[-settings.memory_buffer_size:]
             buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
-            
-            if buffer:
-                await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
-                await self._redis.expire(redis_key, 3600) # 1 hour TTL
 
         return session, buffer, summary, is_restart
 
@@ -110,17 +115,26 @@ class MemoryService:
         # Convert buffer/history to BaseMessage format for trimming
         # Use Redis as the source of truth for recent history to avoid DB latency
         redis_key = f"chat:{session_id}:buffer"
-        raw_msgs = await self._redis.lrange(redis_key, 0, -1)
-        
         messages: List[BaseMessage] = []
-        for rm in raw_msgs:
-            m = json.loads(rm)
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            if role == "user":
-                messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                messages.append(AIMessage(content=content))
+        try:
+            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+            for rm in raw_msgs:
+                m = json.loads(rm)
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    messages.append(AIMessage(content=content))
+        except Exception as e:
+            logger.warning(f"Redis fallback in get_context for {session_id}: {e}")
+            # Fallback to MongoDB messages if Redis fails
+            recent_msgs = session.messages[-settings.memory_buffer_size:]
+            for m in recent_msgs:
+                if m.role == "user":
+                    messages.append(HumanMessage(content=m.text))
+                else:
+                    messages.append(AIMessage(content=m.text))
 
         # Perform token-based trimming (keep last N tokens)
         trimmed_history = trim_messages(
@@ -140,21 +154,24 @@ class MemoryService:
         redis_key = f"chat:{session_id}:buffer"
         msg = {"role": role, "content": content}
         
-        # Check last message in Redis to prevent duplicates
-        last_msg_json = await self._redis.lindex(redis_key, -1)
-        if last_msg_json:
-            last_msg = json.loads(last_msg_json)
-            if last_msg.get("role") == role and last_msg.get("content") == content:
-                logger.warning(f"Duplicate Redis message detected for session {session_id}. Skipping.")
-                return
+        try:
+            # Check last message in Redis to prevent duplicates
+            last_msg_json = await self._redis.lindex(redis_key, -1)
+            if last_msg_json:
+                last_msg = json.loads(last_msg_json)
+                if last_msg.get("role") == role and last_msg.get("content") == content:
+                    logger.warning(f"Duplicate Redis message detected for session {session_id}. Skipping.")
+                    return
 
-        async with self._redis.pipeline() as pipe:
-            await pipe.rpush(redis_key, json.dumps(msg))
-            # Keep Redis buffer slightly larger than default for safety
-            redis_buffer_limit = settings.memory_buffer_size + 10
-            await pipe.ltrim(redis_key, -redis_buffer_limit, -1)
-            await pipe.expire(redis_key, 3600)
-            await pipe.execute()
+            async with self._redis.pipeline() as pipe:
+                await pipe.rpush(redis_key, json.dumps(msg))
+                # Keep Redis buffer slightly larger than default for safety
+                redis_buffer_limit = settings.memory_buffer_size + 10
+                await pipe.ltrim(redis_key, -redis_buffer_limit, -1)
+                await pipe.expire(redis_key, 3600)
+                await pipe.execute()
+        except Exception as e:
+            logger.warning(f"Skipping Redis update for {session_id} due to connection error: {e}")
 
     async def background_save_message(self, session_id: str, user_id: str, role: str, content: str):
         """Background task to save message to MongoDB and handle summarization."""
@@ -184,36 +201,55 @@ class MemoryService:
             logger.error(f"Failed to save message to MongoDB: {e}")
 
     async def background_update_summary(self, session_id: str):
-        """Background task to generate and save session summary."""
+        """Background task to generate and save session summary with atomic locks."""
         try:
-            session = await ChatSession.find_one(ChatSession.session_id == session_id)
+            # 1. Try to acquire summarization lock
+            # We only start if is_summarizing is False
+            session = await ChatSession.find_one(
+                ChatSession.session_id == session_id,
+                ChatSession.is_summarizing == False
+            )
+            
             if not session or not session.messages:
                 return
 
-            # Incremental summarization: Use previous summary + last 20 messages
-            recent_messages = session.messages[-20:]
-            messages_text = "\n".join([f"{m.role}: {m.text}" for m in recent_messages])
+            # Atomic lock set
+            await session.update({"$set": {"is_summarizing": True}})
             
-            if session.summary:
-                prompt = (
-                    f"Here is a summary of the conversation so far:\n{session.summary}\n\n"
-                    f"Here are the latest 20 messages:\n{messages_text}\n\n"
-                    "Update the summary to include the new information, keeping it concise (3-5 sentences). "
-                    "Focus on key topics and user preferences."
+            try:
+                # Incremental summarization: Use previous summary + last 20 messages
+                recent_messages = session.messages[-20:]
+                messages_text = "\n".join([f"{m.role}: {m.text}" for m in recent_messages])
+                
+                if session.summary:
+                    prompt = (
+                        f"Here is a summary of the conversation so far:\n{session.summary}\n\n"
+                        f"Here are the latest 20 messages:\n{messages_text}\n\n"
+                        "Update the summary to include the new information, keeping it concise (3-5 sentences). "
+                        "Focus on key topics and user preferences."
+                    )
+                else:
+                    prompt = (
+                        "Summarize the following conversation in 3-5 sentences, capturing key topics and user preferences.\n\n"
+                        f"{messages_text}"
+                    )
+                
+                response = await self._llm.ainvoke(prompt)
+                summary = response.content.strip()
+                
+                # 2. Atomic update for summary AND lock release
+                # We use find_one().update() or just ChatSession.find(...).update()
+                await ChatSession.find_one(ChatSession.session_id == session_id).update(
+                    {"$set": {"summary": summary, "is_summarizing": False}}
                 )
-            else:
-                prompt = (
-                    "Summarize the following conversation in 3-5 sentences, capturing key topics and user preferences.\n\n"
-                    f"{messages_text}"
+                logger.info(f"Updated summary for session {session_id}")
+            except Exception as e:
+                # Ensure lock is released even on LLM failure
+                await ChatSession.find_one(ChatSession.session_id == session_id).update(
+                    {"$set": {"is_summarizing": False}}
                 )
-            
-            response = await self._llm.ainvoke(prompt)
-            summary = response.content.strip()
-            
-            session.summary = summary
-            await session.save()
-            logger.info(f"Updated summary for session {session_id}")
-            
+                raise e
+                
         except Exception as e:
             logger.error(f"Failed to update summary for session {session_id}: {e}")
 
@@ -248,21 +284,27 @@ class MemoryService:
 
             # 2. Load Redis buffer
             redis_key = f"chat:{session_id}:buffer"
-            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
-            
-            if raw_msgs:
-                buffer = [json.loads(m) for m in raw_msgs]
-                # Fix legacy key if present
-                for msg in buffer:
-                    if "content" not in msg and "text" in msg:
-                        msg["content"] = msg.pop("text")
-            else:
-                # Seed Redis from DB if buffer is empty
+            buffer = []
+            try:
+                raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+                if raw_msgs:
+                    buffer = [json.loads(m) for m in raw_msgs]
+                    # Fix legacy key if present
+                    for msg in buffer:
+                        if "content" not in msg and "text" in msg:
+                            msg["content"] = msg.pop("text")
+                else:
+                    # Seed Redis from DB if buffer is empty
+                    recent_msgs = session.messages[-settings.memory_buffer_size:]
+                    buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
+                    if buffer:
+                        await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
+                        await self._redis.expire(redis_key, 3600)
+            except Exception as e:
+                logger.warning(f"Redis fallback in load_session_full for {session_id}: {e}")
+                # Fallback to MongoDB
                 recent_msgs = session.messages[-settings.memory_buffer_size:]
                 buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
-                if buffer:
-                    await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
-                    await self._redis.expire(redis_key, 3600)
 
         # 3. Convert to BaseMessage and Trim
         messages: List[BaseMessage] = []
@@ -290,10 +332,26 @@ class MemoryService:
         }
 
     async def get_history(self, session_id: str) -> List[ConversationTurn]:
-        """Get history from Redis buffer (for compatibility)."""
+        """Get history from Redis buffer (for compatibility) with DB fallback."""
         redis_key = f"chat:{session_id}:buffer"
-        raw_msgs = await self._redis.lrange(redis_key, 0, -1)
-        return [
-            ConversationTurn(role=m["role"], content=m["content"])
-            for m in [json.loads(rm) for rm in raw_msgs]
-        ]
+        try:
+            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+            if not raw_msgs:
+                # Fallback to DB
+                session = await ChatSession.find_one(ChatSession.session_id == session_id)
+                if session:
+                    recent = session.messages[-settings.memory_buffer_size:]
+                    return [ConversationTurn(role=m.role, content=m.text) for m in recent]
+                return []
+                
+            return [
+                ConversationTurn(role=m["role"], content=m["content"])
+                for m in [json.loads(rm) for rm in raw_msgs]
+            ]
+        except Exception as e:
+            logger.warning(f"Redis failure in get_history for {session_id}: {e}")
+            session = await ChatSession.find_one(ChatSession.session_id == session_id)
+            if session:
+                recent = session.messages[-settings.memory_buffer_size:]
+                return [ConversationTurn(role=m.role, content=m.text) for m in recent]
+            return []

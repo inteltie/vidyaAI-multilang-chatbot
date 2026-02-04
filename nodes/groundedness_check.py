@@ -51,12 +51,21 @@ class GroundednessCheckNode:
 
         logger.info("Running groundedness check for query: %s", query[:50])
         
-        result = await self._validator.validate(
-            query=query,
-            response=response,
-            documents=docs,
-            intent_subjects=intent_subjects
-        )
+        import asyncio
+        try:
+            result = await asyncio.wait_for(
+                self._validator.validate(
+                    query=query,
+                    response=response,
+                    documents=docs,
+                    intent_subjects=intent_subjects
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Groundedness check timed out after 10s. Defaulting to valid.")
+            from services.response_validator import ValidationResult
+            result = ValidationResult(is_valid=True, reasoning="Validation timed out, passed for stability.")
 
         state["validation_results"] = result.dict()
 
@@ -67,7 +76,20 @@ class GroundednessCheckNode:
             # This will cause _route_after_validation to return "pass" 
             # but we've overridden the response, so it behaves like HITL.
         elif not result.is_valid:
-            logger.warning("Response invalid! Feedback: %s", result.feedback)
+            # Phase 2: Replace agent retries with text post-processing for links
+            if result.feedback == "REMOVE_LINKS":
+                import re
+                processed_response = response
+                # Strip markdown links: [text](url) -> text
+                processed_response = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', processed_response)
+                # Strip naked URLs
+                processed_response = re.sub(r'https?://[^\s{}()<>]+(?:\.[^\s{}()<>]+)+', '', processed_response)
+                
+                logger.info("Automatic post-processing: Stripped external links from response.")
+                state["response"] = processed_response.strip()
+                result.is_valid = True # Mark as valid after post-processing
+            else:
+                logger.warning("Response invalid! Feedback: %s", result.feedback)
         else:
             logger.info("Response validated successfully.")
 

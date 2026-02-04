@@ -54,29 +54,35 @@ class RetrieveDocumentsNode:
                  logger.info("Speculative RAG mismatch: raw='%s', analyzed='%s'. Re-fetching.", raw_query[:20], query_en[:20])
 
         # Define tasks (or use speculative result)
-        if can_use_speculative:
-            docs = speculative_docs
-            web_results = None # We'll check for proactive web search below
-        else:
-            rag_task = self._retriever.retrieve(
-                query_en=query_en,
-                filters=clean_filters if clean_filters else None,
-                intent=intent
-            )
-            
-            web_task = None
-            if needs_web_proactive:
-                from tools.web_search_tool import WebSearchTool
-                logger.info("Triggering proactive web search in parallel with RAG...")
-                web_tool = WebSearchTool()
-                web_task = web_tool.execute(query=query_en)
-    
-            # Execute parallelized tasks
-            if web_task:
-                docs, web_results = await asyncio.gather(rag_task, web_task)
+        rag_timeout = 15.0
+        try:
+            if can_use_speculative:
+                docs = speculative_docs
+                web_results = None # We'll check for proactive web search below
             else:
-                docs = await rag_task
-                web_results = None
+                rag_task = self._retriever.retrieve(
+                    query_en=query_en,
+                    filters=clean_filters if clean_filters else None,
+                    intent=intent
+                )
+                
+                web_task = None
+                if needs_web_proactive:
+                    from tools.web_search_tool import WebSearchTool
+                    logger.info("Triggering proactive web search in parallel with RAG...")
+                    web_tool = WebSearchTool()
+                    web_task = web_tool.execute(query=query_en)
+        
+                # Execute parallelized tasks with timeout
+                if web_task:
+                    docs, web_results = await asyncio.wait_for(asyncio.gather(rag_task, web_task), timeout=rag_timeout)
+                else:
+                    docs = await asyncio.wait_for(rag_task, timeout=rag_timeout)
+                    web_results = None
+        except asyncio.TimeoutError:
+            logger.warning("Retrieval tasks timed out after %.1fs", rag_timeout)
+            docs = []
+            web_results = None
 
         state["prefilled_observations"] = []
         
@@ -124,18 +130,26 @@ class RetrieveDocumentsNode:
             llm_calls_in_node += 1
             logger.info("Proactive web search results added.")
         elif state.get("rag_quality") == "low":
-            # RAG failed, and we didn't start web search in parallel. Start it now.
-            logger.info("RAG quality low. Triggering reactive web search...")
-            from tools.web_search_tool import WebSearchTool
-            web_tool = WebSearchTool()
-            web_results = await web_tool.execute(query=query_en)
-            state["prefilled_observations"].append({
-                "tool": "web_search",
-                "args": {"query": query_en},
-                "observation": web_results
-            })
-            llm_calls_in_node += 1
-            logger.info("Reactive web search completed.")
+            # RAG failed, and we didn't start web search in parallel. 
+            # Check if we have enough time left (Stability Phase 2: Skip web search on slow paths)
+            current_elapsed = perf_counter() - start
+            if current_elapsed > 10.0: # If RAG already took > 10s, skip web search
+                logger.warning("RAG quality low but RAG was slow (%.2fs). Skipping reactive web search to save time.", current_elapsed)
+            else:
+                logger.info("RAG quality low. Triggering reactive web search...")
+                from tools.web_search_tool import WebSearchTool
+                web_tool = WebSearchTool()
+                try:
+                    web_results = await asyncio.wait_for(web_tool.execute(query=query_en), timeout=10.0)
+                    state["prefilled_observations"].append({
+                        "tool": "web_search",
+                        "args": {"query": query_en},
+                        "observation": web_results
+                    })
+                    llm_calls_in_node += 1
+                    logger.info("Reactive web search completed.")
+                except asyncio.TimeoutError:
+                    logger.warning("Reactive web search timed out after 10s")
 
         # Build lightweight citations
         citations = []

@@ -22,8 +22,16 @@ class StudentAgentNode:
         initial_llm_calls = state.get("llm_calls", 0)
         logger.info("Running Student agent with ReAct reasoning")
         
-        # Run the Student agent (which internally uses ReAct)
-        new_state = await self._agent(state)
+        # Run the Student agent (which internally uses ReAct) with a 25s timeout
+        import asyncio
+        try:
+            new_state = await asyncio.wait_for(self._agent(state), timeout=25.0)
+        except asyncio.TimeoutError:
+            logger.warning("Student agent execution timed out after 25s")
+            # Return partial state or fallback
+            new_state = state.copy()
+            new_state["response"] = "I'm sorry, but it's taking me longer than usual to process your request. Please try again or ask a simpler question."
+            new_state["is_correction"] = False
         
         duration = perf_counter() - start
         
