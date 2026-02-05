@@ -112,6 +112,8 @@ class AgentState(TypedDict, total=False):
     citations: Annotated[List[Citation], merge_citations]
     timings: Annotated[Dict[str, float], merge_timings]
     llm_calls: Annotated[int, operator.add]
+    input_tokens: Annotated[int, operator.add]
+    output_tokens: Annotated[int, operator.add]
     is_session_restart: bool
 
     # Context gathering tracking

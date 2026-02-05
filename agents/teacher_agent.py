@@ -58,15 +58,9 @@ class TeacherAgent:
         
         logger.info("Registered %d tools for Teacher agent", len(self.tool_registry.list_tools()))
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """
         Process teacher query with analytical focus.
-        
-        The agent will:
-        - Understand what the teacher wants to review
-        - Search for relevant lecture content
-        - Provide summaries and analytical insights
-        - Group information by sessions/topics
         """
         query = state["query_en"]
         history = state.get("conversation_history", [])
@@ -79,10 +73,19 @@ class TeacherAgent:
         # Run ReAct reasoning loop with teacher context and target language
         self.react_agent.build_system_prompt = lambda q, s: self._build_teacher_system_prompt(q, s, target_lang, state)
         
-        # Set correction flag for ReAct trace if validation results exist
+        updates = {
+            "response": "",
+            "citations": [],
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "is_correction": False
+        }
+
+        # Set correction flag if validation results exist
         val_results = state.get("validation_results")
         if val_results and not val_results.get("is_valid"):
-            state["is_correction"] = True
+            updates["is_correction"] = True
             logger.info("Retrying Teacher Agent with corrective feedback...")
         
         try:
@@ -106,13 +109,13 @@ class TeacherAgent:
                 min_score=0.4
             )
             
-            # Update state with results
+            # Prepare updates
             if result and "answer" in result:
-                state["response"] = result["answer"]
-                state["citations"] = citations
-                state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
-            else:
-                citations = []
+                updates["response"] = result["answer"]
+                updates["citations"] = citations
+                updates["llm_calls"] = result.get("iterations", 0)
+                updates["input_tokens"] = result.get("input_tokens", 0)
+                updates["output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Teacher Agent completed with %d iterations, %d citations",
@@ -129,11 +132,11 @@ class TeacherAgent:
                 exc_info=True
             )
             # Return fallback response
-            state["response"] = FALLBACK_MESSAGE
-            state["llm_calls"] = 0
-            state["citations"] = []
+            updates["response"] = FALLBACK_MESSAGE
+            updates["llm_calls"] = 0
+            updates["citations"] = []
         
-        return state
+        return updates
     
 
     def _build_teacher_system_prompt(

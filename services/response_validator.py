@@ -16,6 +16,8 @@ class ValidationResult(BaseModel):
     reasoning: str = Field(description="Explanation for the validation result.")
     feedback: Optional[str] = Field(default=None, description="Corrective feedback for the agent if invalid.")
     clarification_question: Optional[str] = Field(default=None, description="The specific question to ask the user if needs_clarification is True.")
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
 
 
 class ResponseValidator:
@@ -23,7 +25,7 @@ class ResponseValidator:
 
     def __init__(self, llm: ChatOpenAI):
         self._llm = llm
-        self._validator = llm.with_structured_output(ValidationResult)
+        self._validator = llm.with_structured_output(ValidationResult, include_raw=True)
 
     async def validate(
         self,
@@ -71,8 +73,30 @@ RETRY FEEDBACK:
 - If `needs_clarification` is False and `is_valid` is False, provide `feedback` to fix the hallucination. If the only issue is external links, EXACTLY use "REMOVE_LINKS" as feedback.
 """
 
+        from config import settings
         try:
-            result = await self._validator.ainvoke(prompt)
+            output = await self._validator.ainvoke(prompt, config={"max_tokens": settings.validation_tokens})
+            result: ValidationResult = output["parsed"]
+            raw_response = output["raw"]
+            
+            # Log token usage
+            usage = getattr(raw_response, "usage_metadata", None) or getattr(raw_response, "response_metadata", {}).get("token_usage", {})
+            if usage:
+                 i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                 o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                 logger.info(
+                     "[TOKEN_USAGE] ResponseValidator: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                     i_tokens,
+                     o_tokens,
+                     usage.get("total_tokens") or (i_tokens + o_tokens),
+                     self._llm.model_name
+                 )
+            
+            # Populate token counts in result
+            if usage:
+                result.input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                result.output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+
             logger.info("Validation result: valid=%s, reasoning=%s", result.is_valid, result.reasoning)
             return result
         except Exception as e:

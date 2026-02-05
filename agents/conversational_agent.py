@@ -13,7 +13,7 @@ class ConversationalAgent:
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """Generate friendly conversational response."""
         query = state["query"].lower()
         
@@ -21,13 +21,20 @@ class ConversationalAgent:
         is_restart = state.get("is_session_restart", False)
         prefix = "Welcome back! " if is_restart else ""
         
+        updates = {
+            "response": "",
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+        }
+        
         # Template-based responses for common cases
         if any(word in query for word in ["thanks", "thank you", "thx"]):
-            response = f"{prefix}I'm glad I could help! Feel free to ask if you have more questions."
+            updates["response"] = f"{prefix}I'm glad I could help! Feel free to ask if you have more questions."
         elif any(word in query for word in ["bye", "goodbye", "see you"]):
-            response = f"{prefix}Goodbye! Happy learning! 📚"
+            updates["response"] = f"{prefix}Goodbye! Happy learning! 📚"
         elif any(phrase in query for phrase in ["solved", "clear now", "got it", "understood"]):
-            response = f"{prefix}Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
+            updates["response"] = f"{prefix}Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
         else:
             # Use LLM with history and summary for personalized responses
             history = state.get("conversation_history", [])
@@ -38,7 +45,13 @@ class ConversationalAgent:
                 role = "STUDENT" if m.type == "human" else "VIDYA"
                 history_text += f"{role}: {m.content}\n"
             
-            
+            # Log history tokens
+            try:
+                history_tokens = self._llm.get_num_tokens_from_messages(history[-12:])
+                logger.info("[TOKEN_USAGE] Context: chat_history_tokens=%d", history_tokens)
+            except Exception as e:
+                logger.debug("Failed to calculate history tokens: %s", e)
+
             # Check if this is truly the first interaction
             has_history = len(history) > 0
             
@@ -56,12 +69,27 @@ class ConversationalAgent:
                 f"- Your response MUST be in **{target_lang}**.\n"
                 f"- If the student shared their name earlier, use it.\n"
                 f"- {'CRITICAL: This is MID-CONVERSATION (history exists). DO NOT greet with Hello/Hi/Namaste. Just respond naturally to their message.' if has_history else 'This is the FIRST message. Greet warmly and ask how you can help.'}\n"
-                f"- Keep the response brief and encouraging (under 100 tokens)."
-            )
-            resp = await self._llm.ainvoke(prompt)
-            response = resp.content.strip()
-            state["llm_calls"] = state.get("llm_calls", 0) + 1
+                f"- Keep the response brief and encouraging (under 100 tokens).")
+            from config import settings
+            resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
+            updates["response"] = resp.content.strip()
+            
+            # Log token usage
+            usage = getattr(resp, "usage_metadata", None) or getattr(resp, "response_metadata", {}).get("token_usage", {})
+            if usage:
+                i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                updates["input_tokens"] = i_tokens
+                updates["output_tokens"] = o_tokens
+                logger.info(
+                    "[TOKEN_USAGE] ConversationalAgent: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                    i_tokens,
+                    o_tokens,
+                    usage.get("total_tokens"),
+                    self._llm.model_name
+                )
+            
+            updates["llm_calls"] = 1
         
-        state["response"] = response
         logger.info("Conversational agent handled query%s", " (session restart)" if is_restart else "")
-        return state
+        return updates

@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 8001
 
 # Command to run the application with dynamic worker scaling
-CMD ["sh", "-c", "uv run uvicorn main:app --host 0.0.0.0 --port 8001 --workers ${WORKERS:-$(python3 -c 'import multiprocessing; print(multiprocessing.cpu_count() * 2 + 1)')}"]
+CMD ["sh", "-c", "uv run uvicorn main:app --host 0.0.0.0 --port 8001 --workers 2"]

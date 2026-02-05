@@ -50,7 +50,7 @@ class TranslateResponseNode:
 
         # Always try to translate if target_lang is not English and not already marked as translated.
         logger.info("TranslateResponseNode: Ensuring response is in target language: %s", target_lang)
-        translated = await self._translator.from_english(response, target_lang)
+        translated, i_tokens, o_tokens = await self._translator.from_english(response, target_lang)
         
         # Recalculate duration after LLM call
         duration = perf_counter() - start
@@ -59,6 +59,8 @@ class TranslateResponseNode:
         updates["response"] = translated
         updates["final_language"] = target_lang
         updates["llm_calls"] = 1
+        updates["input_tokens"] = i_tokens
+        updates["output_tokens"] = o_tokens
 
         return updates
 

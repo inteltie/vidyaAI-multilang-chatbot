@@ -1,7 +1,6 @@
-"""Web Search Tool using OpenAI's native web search capability."""
-
 import logging
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, Optional, List
 
 from openai import AsyncOpenAI
 
@@ -14,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 class WebSearchTool(Tool):
     """
-    Tool for searching the web using OpenAI's native web search.
+    Tool for searching the web using OpenAI's native web search capability.
     
-    Uses the OpenAI Responses API with web_search tool type.
+    Uses the OpenAI Responses API with web_search_preview tool type.
     """
     
     def __init__(self, api_key: Optional[str] = None):
@@ -28,7 +27,7 @@ class WebSearchTool(Tool):
     
     @property
     def description(self) -> str:
-        return "Search the web for current information, facts, or topics not covered in the curriculum. Use when RAG retrieval doesn't have sufficient information."
+        return "Search the web for current information, facts, or topics. Uses OpenAI's native search which provides high-quality summaries with citations. Use this when you need up-to-date information."
     
     @property
     def parameters_schema(self) -> Dict[str, Any]:
@@ -40,7 +39,7 @@ class WebSearchTool(Tool):
             },
         }
     
-    async def execute(self, query: str, **kwargs) -> str:
+    async def execute(self, query: str, **kwargs) -> tuple[str, int, int]:
         """
         Execute web search using OpenAI's native capability.
         
@@ -48,7 +47,7 @@ class WebSearchTool(Tool):
             query: Search query string
             
         Returns:
-            String with search results summary
+            String with rich search results summary and citations.
         """
         try:
             # Check cache
@@ -56,61 +55,78 @@ class WebSearchTool(Tool):
             cached_result = await CacheService.get(cache_key)
             if cached_result:
                 logger.info("Cache HIT for web search: %s", query)
-                return cached_result
+                return cached_result, 0, 0
             
             logger.info("Executing web search for: %s", query[:100])
             
-            # Use OpenAI's Responses API (if available) or fallback to search-specific model
-            # Note: client.responses is the new API for capabilities
+            # Use OpenAI's Responses API
+            # Note: We use the 'web_search_preview' tool type which triggers the native search
             response = await self._client.responses.create(
-                model=settings.web_search_model_name,
-                input=f"{query}",
+                model=settings.web_search_model_name or "gpt-4o-mini", # Fallback to mini if not set
+                input=f"Please search the web for: {query}",
+                max_output_tokens=200,
                 tools=[{
                     "type": "web_search_preview"
                 }],
-                max_output_tokens=300,
-                temperature=0.0,
             )
             
-            # Responses API returns a different structure, usually response.output or similar which is a string
-            # But the user snippet suggests it returns a response object.
-            # Let's assume response.output based on common patterns for this new API or check logic.
-            # Wait, if `response` is valid, checks `response.output_text` or similar? 
-            # The User didn't specify the return field.
-            # Standard OpenAI `responses` usually return an object with `output_text` or `message`.
-            # However, looking at the user snippet: `response = ...` implies we need to handle it.
-            # If the user says "response = ...", usually `response` object has content.
-            # I will assume `response.output` or `response.content`. 
-            # Actually, standard chat completion returns `choices[0].message.content`.
-            # Responses API typically returns `response.output_text`. 
-            # Let me check if I can interpret "response.choices[0].message.content" is definitely wrong for `responses.create`.
-            # I'll try `response.output_text` if it exists, or dump the response to see.
-            # BUT, to be safe and avoid runtime errors without docs, I'll log it.
-            # Let's assume it behaves like a completion for now or try to find a pattern.
-            # Actually, looking at recent OpenAI "Responses API" docs (fictional context or real), 
-            # it often returns a single object. 
-            # Safe bet: `response.output` or `response.content` or `response.text`.
-            # I will try `response.output_text` as a common pattern for "Responses".
+            # Log token usage
+            i_tokens, o_tokens = 0, 0
+            if hasattr(response, 'usage') and response.usage:
+                i_tokens = response.usage.input_tokens
+                o_tokens = response.usage.output_tokens
+                logger.info(
+                    "[TOKEN_USAGE] WebSearchTool: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                    i_tokens,
+                    o_tokens,
+                    response.usage.total_tokens,
+                    settings.web_search_model_name or "gpt-4o-mini"
+                )
             
-            # RE-READING USER INPUT: 
-            # "This tells the model to use the web search tool... and then return the combined results."
-            # No mention of return format.
-            # I'll guess `response.output_text`. If valid Python SDK, I'd check `dir(response)`.
-            # I'll use `getattr(response, 'output_text', str(response))` to be safe? No that's messy.
-            # I'll stick to `response.output_text` as a likely candidate.
-            result = response.output_text
-            logger.info("Web search completed successfully")
+            # Parse the response structure
+            # The structure is typically: response.output which is a list.
+            # We look for 'message' type output which contains the text and annotations.
             
-            final_result = f"WEB_SEARCH_OBSERVATION for '{query}':\n{result}"
+            final_text = ""
+            citations = []
             
-            # Cache result (TTL 24 hours for web search as facts change slowly)
+            if hasattr(response, 'output'):
+                for item in response.output:
+                    # We are looking for the 'message' type which has the answer
+                    if hasattr(item, 'type') and item.type == 'message':
+                        if hasattr(item, 'content'):
+                            for content_part in item.content:
+                                if hasattr(content_part, 'type') and content_part.type in ['text', 'output_text']:
+                                    final_text += content_part.text
+                                    
+                                    # Extract citations from annotations
+                                    if hasattr(content_part, 'annotations'):
+                                        for annotation in content_part.annotations:
+                                            if hasattr(annotation, 'type') and annotation.type == 'url_citation':
+                                                citation_str = f"[{annotation.title}]({annotation.url})"
+                                                if citation_str not in citations:
+                                                    citations.append(citation_str)
+            
+            if not final_text:
+                logger.warning("No text content found in web search response: %s", response)
+                return "No information found for this query.", i_tokens, o_tokens
+            
+            # Append collected citations if they aren't already embedded nicely
+            # (OpenAI usually embeds them as [1], [2] etc, but adding a sources list is helpful)
+            result_str = final_text
+            if citations:
+                result_str += "\n\n**Sources:**\n" + "\n".join([f"- {c}" for c in citations])
+            
+            final_result = f"WEB_SEARCH_OBSERVATION for '{query}':\n{result_str}"
+            
+            # Cache result (TTL 24 hours)
             await CacheService.set(cache_key, final_result, ttl=86400)
             
-            return final_result
+            return final_result, i_tokens, o_tokens
             
         except Exception as exc:
             logger.error("Web search failed: %s", exc)
-            return f"Web search failed: Could not retrieve results for '{query}'. Error: {str(exc)}"
+            return f"Web search failed: Could not retrieve results for '{query}'. Error: {str(exc)}", 0, 0
 
 
 __all__ = ["WebSearchTool"]

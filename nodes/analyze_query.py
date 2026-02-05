@@ -26,7 +26,10 @@ class AnalyzeQueryNode:
 
     async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
-        updates = {}
+        updates = {
+            "input_tokens": 0,
+            "output_tokens": 0
+        }
         
         query = state["query"]
         history = state.get("conversation_history", [])
@@ -41,7 +44,15 @@ class AnalyzeQueryNode:
                      "preserving all technical constraints and educational context:\n\n"
                      f"{query}"
                  )
-                 resp = await self._classifier._llm.ainvoke(summary_prompt)
+                 from config import settings
+                 resp = await self._classifier._llm.ainvoke(summary_prompt, config={"max_tokens": settings.query_analysis_tokens})
+                 
+                 # Track tokens for summarization
+                 usage = getattr(resp, "usage_metadata", None) or getattr(resp, "response_metadata", {}).get("token_usage", {})
+                 if usage:
+                     updates["input_tokens"] += usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                     updates["output_tokens"] += usage.get("output_tokens") or usage.get("completion_tokens") or 0
+
                  final_query = resp.content.strip()
                  logger.info("Summarized query: %s", final_query[:100])
              elif len(query) > 2000:
@@ -81,6 +92,8 @@ class AnalyzeQueryNode:
             "query_type": result.query_type,
             "subjects": result.subjects,
             "llm_calls": 1,
+            "input_tokens": updates["input_tokens"] + result.input_tokens,
+            "output_tokens": updates["output_tokens"] + result.output_tokens,
         })
         
         

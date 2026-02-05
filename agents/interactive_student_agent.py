@@ -154,7 +154,7 @@ HOW TO RESPOND:
 """
         return prompt
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """
         Process student query with interactive, step-by-step approach.
         """
@@ -166,17 +166,22 @@ HOW TO RESPOND:
         # Get target language
         target_lang = state.get("language", "en")
         
-        # Use pre-detected subjects from state (populated in AnalyzeQueryNode)
-        subjects = state.get("subjects") or ["general"]
-        subjects = [s.lower() for s in subjects]
-        
         # Run ReAct reasoning loop with interactive context and target language
         self.react_agent.build_system_prompt = lambda q, s: self._build_interactive_system_prompt(q, s, target_lang, state)
+        
+        updates = {
+            "response": "",
+            "citations": [],
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "is_correction": False
+        }
 
-        # Set correction flag for ReAct trace if validation results exist
+        # Set correction flag if validation results exist
         val_results = state.get("validation_results")
         if val_results and not val_results.get("is_valid"):
-            state["is_correction"] = True
+            updates["is_correction"] = True
             logger.info("Retrying Interactive Agent with corrective feedback...")
         
         try:
@@ -193,7 +198,7 @@ HOW TO RESPOND:
             )
             
             if result and "answer" in result:
-                state["response"] = result["answer"]
+                updates["response"] = result["answer"]
                 
                 # Extract citations from reasoning chain
                 source_docs = state.get("documents", [])
@@ -203,11 +208,11 @@ HOW TO RESPOND:
                     min_score=0.4
                 )
                 if citations:
-                    state["citations"] = citations
+                    updates["citations"] = citations
                 
-                state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
-            else:
-                state["citations"] = []
+                updates["llm_calls"] = result.get("iterations", 0)
+                updates["input_tokens"] = result.get("input_tokens", 0)
+                updates["output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Interactive Student Agent completed with %d iterations",
@@ -221,11 +226,11 @@ HOW TO RESPOND:
                 exc,
                 exc_info=True
             )
-            state["response"] = FALLBACK_MESSAGE
-            state["llm_calls"] = 0
-            state["citations"] = []
+            updates["response"] = FALLBACK_MESSAGE
+            updates["llm_calls"] = 0
+            updates["citations"] = []
         
-        return state
+        return updates
     
 
 

@@ -122,10 +122,19 @@ class RetrieveDocumentsNode:
         
         if web_results:
             # Web search was done in parallel
+            if isinstance(web_results, tuple) and len(web_results) == 3:
+                obs_text, i_t, o_t = web_results
+                input_tokens = i_t
+                output_tokens = o_t
+            else:
+                obs_text = web_results
+                input_tokens = 0
+                output_tokens = 0
+
             state["prefilled_observations"].append({
                 "tool": "web_search",
                 "args": {"query": query_en},
-                "observation": web_results
+                "observation": obs_text
             })
             llm_calls_in_node += 1
             logger.info("Proactive web search results added.")
@@ -141,10 +150,20 @@ class RetrieveDocumentsNode:
                 web_tool = WebSearchTool()
                 try:
                     web_results = await asyncio.wait_for(web_tool.execute(query=query_en), timeout=10.0)
+                    
+                    if isinstance(web_results, tuple) and len(web_results) == 3:
+                        obs_text, i_t, o_t = web_results
+                        input_tokens = i_t
+                        output_tokens = o_t
+                    else:
+                        obs_text = web_results
+                        input_tokens = 0
+                        output_tokens = 0
+
                     state["prefilled_observations"].append({
                         "tool": "web_search",
                         "args": {"query": query_en},
-                        "observation": web_results
+                        "observation": obs_text
                     })
                     llm_calls_in_node += 1
                     logger.info("Reactive web search completed.")
@@ -175,6 +194,8 @@ class RetrieveDocumentsNode:
             "rag_quality": state["rag_quality"],
             "citations": state["citations"],
             "llm_calls": llm_calls_in_node,
+            "input_tokens": input_tokens if "input_tokens" in locals() else 0,
+            "output_tokens": output_tokens if "output_tokens" in locals() else 0,
             "timings": {"retrieve_documents": duration}
         }
 

@@ -104,9 +104,11 @@ class GroundednessCheckNode:
         }
         
         # Only include fields that were potentially modified
-        if "validation_results" in locals() or "result" in locals():
-            updates["validation_results"] = state.get("validation_results")
+        if "result" in locals():
+            updates["validation_results"] = result.dict()
             updates["llm_calls"] = 1
+            updates["input_tokens"] = result.input_tokens
+            updates["output_tokens"] = result.output_tokens
             
             if state.get("clarification_message"):
                 updates["response"] = state["response"]

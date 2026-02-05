@@ -157,15 +157,9 @@ HOW TO RESPOND:
         
         logger.info("Registered %d tools for Student agent", len(self.tool_registry.list_tools()))
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """
         Process student query with educational focus.
-        
-        The agent will:
-        - Understand what the student wants to learn
-        - Search for relevant educational content
-        - Provide clear explanations with examples
-        - Encourage learning and understanding
         """
         query = state["query_en"]
         history = state.get("conversation_history", [])
@@ -178,10 +172,19 @@ HOW TO RESPOND:
         # Run ReAct reasoning loop with student context and target language
         self.react_agent.build_system_prompt = lambda q, s: self._build_student_system_prompt(q, s, target_lang, state)
         
-        # Set correction flag for ReAct trace if validation results exist
+        updates = {
+            "response": "",
+            "citations": [],
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "is_correction": False
+        }
+
+        # Set correction flag if validation results exist
         val_results = state.get("validation_results")
         if val_results and not val_results.get("is_valid"):
-            state["is_correction"] = True
+            updates["is_correction"] = True
             logger.info("Retrying Student Agent with corrective feedback...")
         
         try:
@@ -199,10 +202,9 @@ HOW TO RESPOND:
             
             # If we have a valid result from the agent
             if result and "answer" in result:
-                state["response"] = result["answer"]
+                updates["response"] = result["answer"]
                 
                 # Extract citations from reasoning chain
-                # source_documents comes from state["documents"] (retrieved in RetrieveDocumentsNode)
                 source_docs = state.get("documents", [])
                 citations = CitationService.extract_citations(
                     result.get("reasoning_chain", []), 
@@ -210,16 +212,16 @@ HOW TO RESPOND:
                     min_score=0.4
                 )
                 if citations:
-                    state["citations"] = citations
+                    updates["citations"] = citations
                 
-                state["llm_calls"] = state.get("llm_calls", 0) + result.get("iterations", 0)
-            else:
-                citations = []
+                updates["llm_calls"] = result.get("iterations", 0)
+                updates["input_tokens"] = result.get("input_tokens", 0)
+                updates["output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Student Agent completed with %d iterations, %d citations",
                 result.get("iterations", 0),
-                len(citations),
+                len(updates["citations"]),
             )
         except Exception as exc:
             logger.error(
@@ -231,11 +233,11 @@ HOW TO RESPOND:
                 exc_info=True
             )
             # Return fallback response
-            state["response"] = FALLBACK_MESSAGE
-            state["llm_calls"] = 0
-            state["citations"] = []
+            updates["response"] = FALLBACK_MESSAGE
+            updates["llm_calls"] = 0
+            updates["citations"] = []
         
-        return state
+        return updates
     
 
 

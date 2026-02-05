@@ -33,6 +33,8 @@ class ReActAgentNode:
             "reasoning_chain": result.get("reasoning_chain", []),
             "react_iterations": result.get("iterations", 0),
             "llm_calls": result.get("iterations", 0),
+            "input_tokens": result.get("input_tokens", 0),
+            "output_tokens": result.get("output_tokens", 0),
             "timings": {"react_agent": duration}
         }
 

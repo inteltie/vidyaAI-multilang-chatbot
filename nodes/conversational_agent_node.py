@@ -18,17 +18,13 @@ class ConversationalAgentNode:
     async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
         
-        initial_llm_calls = state.get("llm_calls", 0)
-        new_state = await self._agent(state)
+        # Run agent - now returns a dict of updates
+        updates = await self._agent(state)
         
         duration = perf_counter() - start
-        calls_made = new_state.get("llm_calls", 0) - initial_llm_calls
-
-        return {
-            "response": new_state.get("response", ""),
-            "llm_calls": max(0, calls_made),
-            "timings": {"conversational_agent": duration}
-        }
+        updates["timings"] = {"conversational_agent": duration}
+        
+        return updates
 
 
 __all__ = ["ConversationalAgentNode"]

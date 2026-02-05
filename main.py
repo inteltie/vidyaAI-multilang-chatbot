@@ -337,6 +337,8 @@ class BackendApp:
                     "llm_calls": 0,
                     "timings": {},
                     "is_session_restart": False,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
                 }
                 
                 # Store UI filters separately (only for RAG retrieval)
@@ -361,6 +363,14 @@ class BackendApp:
                 graph_duration = perf_counter() - graph_start
                 final_state["timings"]["total_graph"] = graph_duration
                 logger.info("Total graph execution took %.3f seconds", graph_duration)
+                
+                # Global token usage log
+                logger.info(
+                    "[TOKEN_USAGE] TOTAL REQUEST CYCLE: input_tokens=%s, output_tokens=%s, total_tokens=%s",
+                    final_state.get("input_tokens", 0),
+                    final_state.get("output_tokens", 0),
+                    final_state.get("input_tokens", 0) + final_state.get("output_tokens", 0)
+                )
 
                 message = final_state.get("response", "")
                 

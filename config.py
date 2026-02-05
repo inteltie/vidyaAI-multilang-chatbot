@@ -45,6 +45,11 @@ class Settings(BaseModel):
     max_tokens_default: int = Field(500, description="Default max tokens for LLM response")
     max_tokens_detailed: int = Field(1000, description="Max tokens for detailed responses")
     max_tokens_brief: int = Field(300, description="Max tokens for brief responses")
+    
+    # Specific Caps
+    query_analysis_tokens: int = Field(100, description="Max tokens for query analysis")
+    main_response_tokens: int = Field(2000, description="Max tokens for main agent response")
+    validation_tokens: int = Field(300, description="Max tokens for response validation")
     memory_buffer_size: int = Field(10, description="Number of turns to keep in memory buffer")
     memory_token_limit: int = Field(2000, description="Max tokens for conversation history buffer")
     
@@ -86,6 +91,10 @@ class Settings(BaseModel):
             "max_tokens_default": int(os.getenv("MAX_TOKENS_DEFAULT") or 1500),
             "max_tokens_detailed": int(os.getenv("MAX_TOKENS_DETAILED") or 3000),
             "max_tokens_brief": int(os.getenv("MAX_TOKENS_BRIEF") or 800),
+            
+            "query_analysis_tokens": int(os.getenv("QUERY_ANALYSIS_TOKENS") or 100),
+            "main_response_tokens": int(os.getenv("MAIN_RESPONSE_TOKENS") or 2000),
+            "validation_tokens": int(os.getenv("VALIDATION_TOKENS") or 300),
             "memory_buffer_size": int(os.getenv("MEMORY_BUFFER_SIZE") or 20),
             "memory_token_limit": int(os.getenv("MEMORY_TOKEN_LIMIT") or 2000),
             

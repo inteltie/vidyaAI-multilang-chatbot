@@ -98,8 +98,18 @@ class ReActAgent:
         """
         Run the agent loop to answer the query.
         """
+        # Calculate history tokens before modifying messages
+        try:
+            history_tokens = self.llm.get_num_tokens_from_messages(messages)
+            logger.info("[TOKEN_USAGE] Context: chat_history_tokens=%d", history_tokens)
+        except Exception as e:
+            logger.debug("Failed to calculate history tokens: %s", e)
+
         messages = self._build_messages(query, messages, summary, session_metadata)
         scratchpad: List[Dict[str, str]] = []
+        
+        total_input_tokens = 0
+        total_output_tokens = 0
         
         # Inject prefilled observations (Proactive RAG)
         if prefilled_observations:
@@ -130,6 +140,14 @@ class ReActAgent:
                     "observation": obs["observation"]
                 })
             
+            # Calculate document tokens
+            try:
+                all_obs_text = "\n".join([str(obs["observation"]) for obs in prefilled_observations])
+                doc_tokens = self.llm.get_num_tokens(all_obs_text)
+                logger.info("[TOKEN_USAGE] Context: retrieved_documents_tokens=%d (Count: %d)", doc_tokens, len(prefilled_observations))
+            except Exception as e:
+                logger.debug("Failed to calculate document tokens: %s", e)
+            
             # Add simulated calls to history
             messages.append(AIMessage(content="", tool_calls=tool_calls))
             messages.extend(obs_messages)
@@ -139,7 +157,24 @@ class ReActAgent:
             
             # 1. Call LLM
             llm_start = asyncio.get_event_loop().time()
-            response = await self.llm_with_tools.ainvoke(messages)
+            response = await self.llm_with_tools.ainvoke(messages, config={"max_tokens": settings.main_response_tokens})
+            
+            # Log token usage
+            usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
+            if usage:
+                 i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                 o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                 total_input_tokens += i_tokens
+                 total_output_tokens += o_tokens
+                 logger.info(
+                     "[TOKEN_USAGE] ReActAgent (Iteration %d): input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                     iteration,
+                     i_tokens,
+                     o_tokens,
+                     usage.get("total_tokens"),
+                     self.llm.model_name
+                 )
+            
             llm_duration = asyncio.get_event_loop().time() - llm_start
             logger.info("Agent iteration %d: LLM call took %.3fs", iteration, llm_duration)
             messages.append(response)
@@ -152,6 +187,8 @@ class ReActAgent:
                     "answer": response.content,
                     "reasoning_chain": scratchpad,
                     "iterations": iteration,
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
                 }
             
             # 3. Execute tools
@@ -217,19 +254,27 @@ class ReActAgent:
                 
                 # Process results and update state
                 for meta, observation in zip(tool_metadatas, results):
+                    # Handle tuple results (result_str, i_tokens, o_tokens)
+                    if isinstance(observation, tuple) and len(observation) == 3:
+                        observation_str, i_t, o_t = observation
+                        total_input_tokens += i_t
+                        total_output_tokens += o_t
+                    else:
+                        observation_str = str(observation)
+
                     # Record in scratchpad
                     scratchpad.append({
                         "iteration": iteration,
                         "thought": "Using tool...", 
                         "action": meta["name"],
                         "action_input": str(meta["args"]),
-                        "observation": observation,
+                        "observation": observation_str,
                         "duration": tool_duration # Record duration in scratchpad for debugging
                     })
                     
                     # Add tool result to messages
                     messages.append(ToolMessage(
-                        content=str(observation),
+                        content=observation_str,
                         tool_call_id=meta["id"],
                         name=meta["name"]
                     ))
@@ -248,17 +293,37 @@ class ReActAgent:
                 "provide the most complete answer possible. If you still don't have enough info, be honest but helpful."
             )
             messages.append(HumanMessage(content=synthesis_prompt))
-            final_resp = await self.llm.ainvoke(messages)
+            final_resp = await self.llm.ainvoke(messages, config={"max_tokens": settings.main_response_tokens})
+            
+            # Log token usage
+            usage = getattr(final_resp, "usage_metadata", None) or getattr(final_resp, "response_metadata", {}).get("token_usage", {})
+            if usage:
+                 i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                 o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                 total_input_tokens += i_tokens
+                 total_output_tokens += o_tokens
+                 logger.info(
+                     "[TOKEN_USAGE] ReActAgent (Synthesis): input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                     i_tokens,
+                     o_tokens,
+                     usage.get("total_tokens"),
+                     self.llm.model_name
+                 )
+            
             return {
                 "answer": final_resp.content,
                 "reasoning_chain": scratchpad,
                 "iterations": self.max_iterations,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
             }
 
         return {
             "answer": FALLBACK_MESSAGE,
             "reasoning_chain": scratchpad,
             "iterations": self.max_iterations,
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
         }
 
     def _build_messages(

@@ -30,6 +30,8 @@ class QueryClassification(BaseModel):
     extracted_subject: Optional[str] = Field(None, description="Detailed subject name if mentioned")
     chapter: Optional[str] = Field(None, description="Chapter or topic name if mentioned")
     lecture_id: Optional[str] = Field(None, description="Specific lecture/session ID if mentioned")
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
 
 
 class QueryClassifier:
@@ -37,7 +39,7 @@ class QueryClassifier:
     
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
-        self._classifier = llm.with_structured_output(QueryClassification)
+        self._classifier = llm.with_structured_output(QueryClassification, include_raw=True)
         self._cache = {} # Simple cache for query analysis results
     
     def _check_heuristics(self, query: str) -> QueryClassification | None:
@@ -153,8 +155,28 @@ CRITICAL RULES:
 """
         
         try:
-            result: QueryClassification = await self._classifier.ainvoke(prompt)
+            output = await self._classifier.ainvoke(prompt, config={"max_tokens": settings.query_analysis_tokens})
+            result: QueryClassification = output["parsed"]
+            raw_response = output["raw"]
             
+            # Log token usage from raw response
+            usage = getattr(raw_response, "usage_metadata", None) or getattr(raw_response, "response_metadata", {}).get("token_usage", {})
+            if usage:
+                 i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                 o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                 logger.info(
+                     "[TOKEN_USAGE] QueryClassifier: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                     i_tokens,
+                     o_tokens,
+                     usage.get("total_tokens") or (i_tokens + o_tokens),
+                     self._llm.model_name
+                 )
+            
+            # Populate token counts in result
+            if usage:
+                result.input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                result.output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+
             logger.info(
                 "Query analyzed: type=%s, translated='%s'",
                 result.query_type,

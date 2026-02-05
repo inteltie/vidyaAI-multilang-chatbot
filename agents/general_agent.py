@@ -13,13 +13,29 @@ class GeneralAgent:
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
     
-    async def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> dict:
         """Generate educational response from general knowledge."""
         query = state["query_en"]
         user_type = state["user_type"]
         history = state.get("conversation_history", [])
         
         history_text = "\n".join(f"{t['role']}: {t['content']}" for t in history[-4:])
+        
+        # Log history tokens
+        try:
+            # GeneralAgent uses dict-based history in its internal loop, but we can convert to BaseMessages for counting
+            from langchain_core.messages import HumanMessage, AIMessage
+            messages_for_counting = []
+            for t in history[-4:]:
+                if t['role'] == 'user':
+                    messages_for_counting.append(HumanMessage(content=t['content']))
+                else:
+                    messages_for_counting.append(AIMessage(content=t['content']))
+            
+            history_tokens = self._llm.get_num_tokens_from_messages(messages_for_counting)
+            logger.info("[TOKEN_USAGE] Context: chat_history_tokens=%d", history_tokens)
+        except Exception as e:
+            logger.debug("Failed to calculate history tokens: %s", e)
         
         role_instructions = (
             "Explain clearly and simply, step-by-step, suitable for a student. Use analogies when helpful."
@@ -38,11 +54,32 @@ Student question: {query}
 
 Provide a helpful, educational answer. Keep it concise but informative.
 Optionally end with one short follow-up question to encourage learning.
-"""
+        """
+        from config import settings
+        resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
+        response = resp.content.strip()
         
-        resp = await self._llm.ainvoke(prompt)
-        state["response"] = resp.content.strip()
-        state["llm_calls"] = state.get("llm_calls", 0) + 1
+        updates = {
+            "response": response,
+            "llm_calls": 1,
+            "input_tokens": 0,
+            "output_tokens": 0
+        }
         
+        # Log token usage
+        usage = getattr(resp, "usage_metadata", None) or getattr(resp, "response_metadata", {}).get("token_usage", {})
+        if usage:
+            i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+            o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+            updates["input_tokens"] = i_tokens
+            updates["output_tokens"] = o_tokens
+            logger.info(
+                "[TOKEN_USAGE] GeneralAgent: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
+                i_tokens,
+                o_tokens,
+                usage.get("total_tokens"),
+                self._llm.model_name
+            )
+            
         logger.info("General agent handled query")
-        return state
+        return updates
