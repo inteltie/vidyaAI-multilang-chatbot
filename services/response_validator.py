@@ -11,11 +11,9 @@ logger = logging.getLogger(__name__)
 
 class ValidationResult(BaseModel):
     """Result of a response validation check."""
-    is_valid: bool = Field(description="Whether the response is factually grounded and matches intent.")
-    needs_clarification: bool = Field(default=False, description="Whether the user needs to be asked for clarification due to ambiguity.")
+    is_valid: bool = Field(description="Whether the response matches the expected language.")
     reasoning: str = Field(description="Explanation for the validation result.")
-    feedback: Optional[str] = Field(default=None, description="Corrective feedback for the agent if invalid.")
-    clarification_question: Optional[str] = Field(default=None, description="The specific question to ask the user if needs_clarification is True.")
+    feedback: Optional[str] = Field(default=None, description="Corrective feedback if language mismatch.")
     input_tokens: int = Field(default=0)
     output_tokens: int = Field(default=0)
 
@@ -29,48 +27,26 @@ class ResponseValidator:
 
     async def validate(
         self,
-        query: str,
         response: str,
-        documents: List[Document],
-        intent_subjects: List[str],
+        target_lang: str,
     ) -> ValidationResult:
         """
-        Perform groundedness and intent-alignment validation.
+        Verify if the response matches the target language.
         """
-        if not documents:
-            return ValidationResult(is_valid=True, reasoning="No documents to validate against.")
+        prompt = f"""You are a Language Consistency Checker. Your ONLY job is to verify if the AI Agent's response is in the CORRECT language.
 
-        doc_context = "\n\n".join([
-            f"Doc {i+1} (Subject: {d.get('metadata', {}).get('subject', 'N/A')}):\n{d.get('text', '')}"
-            for i, d in enumerate(documents[:5])
-        ])
-
-        prompt = f"""You are a strict EDUCATIONAL GUARDIAN. Your job is to verify if an AI Agent's response is CORRECT and ALIGNED with the user's intent.
-
-User Query: {query}
-Detected Intent Subjects: {', '.join(intent_subjects)}
-
-Retrieved Documents:
-{doc_context}
+Target Language: {target_lang}
 
 Agent's Response:
 {response}
 
-VERIFICATION TASKS:
-1. **Groundedness**: Is the answer supported by the provided documents? 
-2. **Intent Alignment**: If the documents contain multiple subjects (e.g., Transformers in AI vs Electrical), did the agent pick the correct one matching '{intent_subjects[0] if intent_subjects else 'General'}'?
-3. **Ambiguity Detection (CRITICAL)**: If the documents show multiple distinct and valid interpretations of the query, and the Agent's choice seems like a guess or excludes a likely alternative, set `needs_clarification` to True.
-4. **NO EXTERNAL LINKS (MANDATORY)**: Check if the response contains ANY links to external websites (e.g., [Google](https://google.com), https://wikipedia.org). 
-    - **STRICT EXCEPTION**: Phrases like "sources provided", "retrieved documents", or citations like `[1]`, `[2]` are NOT links and MUST be allowed.
-    - If the response contains actual URLs or clickable external links, mark `is_valid` as False and provide feedback exactly as "REMOVE_LINKS".
-5. **Language Consistency**: Is the response in the same language as the user's likely preference (if detectable from context)? 
-
-RULES for `needs_clarification`:
-- Set to True if the query is significantly ambiguous (e.g., "Transformers") and the retrieved documents have strong evidence for multiple contexts.
-- Provide a `clarification_question` that briefly describes the detected contexts and asks the user which one they want (e.g., "I found information on both electrical transformers and neural networks. Which one should I explain?").
+VERIFICATION TASK:
+1. Is the response ENTIRELY or PREDOMINANTLY in {target_lang}? 
+2. If the response contains mixed languages or is in a completely different language (e.g., English instead of Hindi), mark `is_valid` as False.
+3. Technical terms or formulas in English are acceptable if they are commonly used.
 
 RETRY FEEDBACK:
-- If `needs_clarification` is False and `is_valid` is False, provide `feedback` to fix the hallucination. If the only issue is external links, EXACTLY use "REMOVE_LINKS" as feedback.
+- If `is_valid` is False, provide `feedback` like "Translate the response into {target_lang}."
 """
 
         from config import settings

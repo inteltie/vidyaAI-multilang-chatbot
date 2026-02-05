@@ -106,7 +106,7 @@ class RetrievalTool(Tool):
             return f"Error during retrieval: {str(exc)}"
 
     @staticmethod
-    def format_documents(docs: List[Document], min_score: float = 0.4) -> str:
+    def format_documents(docs: List[Document], min_score: float = 0.45) -> str:
         """Format documents for agent observation with minimal metadata."""
         if not docs:
             return "No documents found."

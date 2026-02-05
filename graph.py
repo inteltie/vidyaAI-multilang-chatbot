@@ -86,8 +86,8 @@ class ChatbotGraphBuilder:
         if not val_results:
             return "pass"
             
-        # If valid OR needs clarification (HITL), we pass through to translation
-        if val_results.get("is_valid") or val_results.get("needs_clarification"):
+        # If valid, we pass through to translation
+        if val_results.get("is_valid"):
             return "pass"
         
         # Limit retries to 1 (is_correction is set by agent on retry)

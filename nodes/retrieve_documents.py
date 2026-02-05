@@ -89,27 +89,30 @@ class RetrieveDocumentsNode:
         # Process RAG results
         if docs:
             # Filter for state["documents"] as well to ensure validator uses high-score docs
-            high_score_docs = [d for d in docs if d.get("score", 0.0) >= 0.40]
+            high_score_docs = [d for d in docs if d.get("score", 0.0) >= 0.45]
             state["documents"] = high_score_docs
             
-            from tools import RetrievalTool
-            obs_text = RetrievalTool.format_documents(docs, min_score=0.40)
-            state["prefilled_observations"].append({
-                "tool": "retrieve_documents",
-                "args": {"query": query_en, "filters": request_filters},
-                "observation": obs_text
-            })
-            
-            # PROACTIVE SUFFICIENCY ASSESSMENT
-            # Adjusted thresholds to reduce unnecessary web searches
             top_score = docs[0].get("score", 0)
-            if top_score > 0.65:
-                state["rag_quality"] = "high"
-            elif top_score > 0.45:
-                state["rag_quality"] = "medium"
+            
+            # Only add RAG results to prefilled_observations if they pass the threshold
+            if top_score >= 0.45:
+                from tools import RetrievalTool
+                obs_text = RetrievalTool.format_documents(docs, min_score=0.45)
+                state["prefilled_observations"].append({
+                    "tool": "retrieve_documents",
+                    "args": {"query": query_en, "filters": request_filters},
+                    "observation": obs_text
+                })
+                
+                # Assess RAG quality
+                if top_score > 0.65:
+                    state["rag_quality"] = "high"
+                else:
+                    state["rag_quality"] = "medium"
             else:
                 state["rag_quality"] = "low"
-                
+                logger.info("Top RAG score %.3f below 0.45 threshold. Bypassing RAG documents.", top_score)
+            
             logger.info("Found %d docs. Quality: %s (Score: %.3f)", 
                         len(docs), state["rag_quality"], top_score)
         else:
