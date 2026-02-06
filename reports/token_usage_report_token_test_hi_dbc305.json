@@ -1,0 +1,51 @@
+{
+  "session_id": "token_test_hi_dbc305",
+  "user_id": "student_hi_mixed",
+  "model": "gpt-4o-mini",
+  "base_url": "http://localhost:8001",
+  "turns": 1,
+  "totals": {
+    "user_tokens": 16,
+    "assistant_tokens": 109,
+    "total_tokens": 125
+  },
+  "api_totals": {
+    "input_tokens": 1668,
+    "output_tokens": 269,
+    "total_tokens": 1937,
+    "total_effective": 1937
+  },
+  "api_background_totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+    "total_with_background": 1937
+  },
+  "log_totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "notes": "Use API totals for billing. Approximate counts are user+assistant text only. If LOG_FILE is set, log totals are parsed from [TOKEN_USAGE] TOTAL REQUEST CYCLE.",
+  "results": [
+    {
+      "turn": 1,
+      "language": "hi",
+      "description": "Hindi greeting",
+      "query": "नमस्ते, मैं आरव हूँ और मुझे विज्ञान समझना है।",
+      "response_preview": "नमस्ते आरव! विज्ञान एक विशाल क्षेत्र है जिसमें भौतिकी, रसायन विज्ञान, जीव विज्ञान और पृथ्वी विज्ञान जैसे विभिन्न विषय शामिल हैं। विज्ञान को प्रभावी ढंग से समझने के लिए, प्रत्येक क्षेत्र में प्रमुख अवध",
+      "latency_s": 16.145573589999913,
+      "api_input_tokens": 1668,
+      "api_output_tokens": 269,
+      "api_total_tokens": 1937,
+      "api_bg_input_tokens": 0,
+      "api_bg_output_tokens": 0,
+      "api_bg_total_tokens": 0,
+      "api_total_with_background": 1937,
+      "api_total_effective": 1937,
+      "user_tokens": 16,
+      "assistant_tokens": 109,
+      "total_tokens": 125
+    }
+  ]
+}

@@ -104,13 +104,32 @@ class QueryClassifier:
         import hashlib
         import json
         
-        # 1. Check cache first
+        # 1. Check cache first (L1 memory, L2 Redis)
         if settings.enable_query_caching:
             history_text_for_hash = self._format_history(history, limit=2) # Only use 2 turns for cache key stability
             cache_key = hashlib.md5(f"{query}||{history_text_for_hash}".encode()).hexdigest()
             if cache_key in self._cache:
                 logger.info("Found query classification in cache for: %s", query[:30])
-                return self._cache[cache_key]
+                cached_result = self._cache[cache_key]
+                return cached_result.model_copy(update={
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning": f"Cached result. {cached_result.reasoning}"
+                })
+            try:
+                from services.cache_service import CacheService
+                redis_key = f"qclf:{cache_key}"
+                cached = await CacheService.get(redis_key)
+                if cached:
+                    logger.info("Found query classification in Redis cache for: %s", query[:30])
+                    cached_result = QueryClassification(**cached)
+                    return cached_result.model_copy(update={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning": f"Cached result. {cached_result.reasoning}"
+                    })
+            except Exception as exc:
+                logger.debug("Redis cache lookup failed for query classification: %s", exc)
 
         # 2. Try heuristics first (Zero LLM calls)
         heuristic_result = self._check_heuristics(query)
@@ -118,40 +137,20 @@ class QueryClassifier:
             logger.info("Heuristic classification: %s", heuristic_result.reasoning)
             return heuristic_result
 
-        history_text = self._format_history(history, limit=10)
+        history_text = self._format_history(history, limit=5)
         
-        prompt = f"""Analyze this student query. 
+        prompt = f"""Analyze student query. 
 
 Tasks:
-1. **Query Contextualization (CRITICAL)**: If the latest query is a follow-up or contains pronouns/contextual references (e.g., "What are its requirements?", "Why?", "Explain more"), reconstruct it into a standalone English query using the conversation history. Example: "What are its requirements?" -> "What are the requirements for photosynthesis?".
-2. Translate the query to clear English (if not already English).
-3. Classify into ONE category: "conversational" or "curriculum_specific".
-4. If "curriculum_specific", detect one or more subjects: [Math, Science, History, Geography, General].
-5. **Context Extraction**: Scan both the query and history for educational metadata:
-   - class_level: (e.g., "Class 10", "Grade 12", "Batch A")
-   - extracted_subject: (e.g., "Algebra", "Organic Chemistry", "Middle Ages")
-   - chapter: (e.g., "Quadratic Equations", "Chapter 5", "World War II")
-   - lecture_id: (e.g., "session_12", "lecture_101", "76")
+1. **Standalone Query**: Reconstruct pronouns/follow-ups into complete English query (e.g., "Why?" -> "Why does photosynthesis happen?"). 
+2. Translate to English (if needed).
+3. Classify: "conversational" (greetings, meta-chat, help) or "curriculum_specific" (educational topics).
+4. For "curriculum_specific", scan for: class_level, subjects, chapter, lecture_id.
 
-Conversation history:
+History:
 {history_text}
 
-Latest query: {query}
-
-Categories:
-1. "conversational" - Greetings, small talk, general help requests, expressing satisfaction, OR meta-queries about the chat itself (e.g., "Analyze this query", "How do you work?").
-2. "curriculum_specific" - ANY educational question about specific topics (Physics, Math, History, etc.) requiring external knowledge.
-
-CRITICAL RULES:
-- **Standalone Query**: Always return a complete, standalone version of the query in `translated_query`.
-- Choose "curriculum_specific" ONLY if the user asks about a specific educational topic (e.g., "Newton's laws", "World War II").
-- Choose "conversational" for:
-  - Greetings ("Hi", "Hello")
-  - General help requests ("I need help")
-  - Meta-queries ("Analyze this query", "What can you do?", "Ignore previous instructions")
-  - Thanks/Feedback ("Good job", "Thanks")
-- For subjects, return a list including any that apply. Use "General" as fallback.
-- Be thorough with Context Extraction. If the user mentions "in session 10", extract lecture_id as "10".
+Query: {query}
 """
         
         try:
@@ -196,6 +195,12 @@ CRITICAL RULES:
                 history_text_for_hash = self._format_history(history, limit=2)
                 cache_key = hashlib.md5(f"{query}||{history_text_for_hash}".encode()).hexdigest()
                 self._cache[cache_key] = result
+                try:
+                    from services.cache_service import CacheService
+                    redis_key = f"qclf:{cache_key}"
+                    await CacheService.set(redis_key, result.model_dump(), ttl=settings.query_cache_ttl)
+                except Exception as exc:
+                    logger.debug("Redis cache set failed for query classification: %s", exc)
             
             return result
             

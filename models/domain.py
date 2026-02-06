@@ -76,6 +76,34 @@ class ChatResponse(BaseModel):
         0,
         description="Total number of LLM calls used to answer this request.",
     )
+    input_tokens: int = Field(
+        0,
+        description="Total input tokens used for this request cycle.",
+    )
+    output_tokens: int = Field(
+        0,
+        description="Total output tokens used for this request cycle.",
+    )
+    total_tokens: int = Field(
+        0,
+        description="Total tokens (input + output) used for this request cycle.",
+    )
+    background_input_tokens: int = Field(
+        0,
+        description="Input tokens used by background summarization since last response.",
+    )
+    background_output_tokens: int = Field(
+        0,
+        description="Output tokens used by background summarization since last response.",
+    )
+    background_total_tokens: int = Field(
+        0,
+        description="Total tokens used by background summarization since last response.",
+    )
+    total_tokens_with_background: int = Field(
+        0,
+        description="Total tokens including background summarization since last response.",
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -96,8 +124,6 @@ class DocumentCitation(BaseModel):
     lecture_id: Optional[str] = None
     transcript_id: Optional[str] = None
     chunk_id: Optional[str] = None
-
-
 
 
 

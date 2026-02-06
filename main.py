@@ -387,6 +387,24 @@ class BackendApp:
                 citations = final_state.get("citations", []) or []
                 timings = final_state.get("timings", {}) or {}
                 llm_calls = int(final_state.get("llm_calls", 0) or 0)
+                input_tokens = int(final_state.get("input_tokens", 0) or 0)
+                output_tokens = int(final_state.get("output_tokens", 0) or 0)
+                total_tokens = input_tokens + output_tokens
+
+                # Include background summarization tokens since last response (if any)
+                bg_input_tokens = 0
+                bg_output_tokens = 0
+                bg_total_tokens = 0
+                try:
+                    from services.cache_service import CacheService
+                    bg = await CacheService.pop_hash(f"bg_tokens:{request.user_session_id}")
+                    if bg:
+                        bg_input_tokens = int(bg.get("input_tokens", 0))
+                        bg_output_tokens = int(bg.get("output_tokens", 0))
+                        bg_total_tokens = int(bg.get("total_tokens", 0))
+                except Exception:
+                    pass
+                total_with_background = total_tokens + bg_total_tokens
 
                 # Log per-step timings to the server log
                 for step, duration in sorted(timings.items()):
@@ -399,6 +417,13 @@ class BackendApp:
                     language=language,
                     citations=citations,
                     llm_calls=llm_calls,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    background_input_tokens=bg_input_tokens,
+                    background_output_tokens=bg_output_tokens,
+                    background_total_tokens=bg_total_tokens,
+                    total_tokens_with_background=total_with_background,
                 )
 
             except HTTPException:
@@ -425,4 +450,3 @@ app = backend.app
 
 if __name__ == "__main__":  # pragma: no cover - manual run helper
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
-

@@ -3,6 +3,7 @@
 import logging
 from langchain_openai import ChatOpenAI
 from state import AgentState
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +19,15 @@ class GeneralAgent:
         query = state["query_en"]
         user_type = state["user_type"]
         history = state.get("conversation_history", [])
-        
-        history_text = "\n".join(f"{t['role']}: {t['content']}" for t in history[-4:])
+        history_text = "\n".join(f"{t['role']}: {t['content']}" for t in history[-settings.memory_buffer_size:])
+        summary = state.get("session_metadata", {}).get("summary", "")
         
         # Log history tokens
         try:
             # GeneralAgent uses dict-based history in its internal loop, but we can convert to BaseMessages for counting
             from langchain_core.messages import HumanMessage, AIMessage
             messages_for_counting = []
-            for t in history[-4:]:
+            for t in history[-settings.memory_buffer_size:]:
                 if t['role'] == 'user':
                     messages_for_counting.append(HumanMessage(content=t['content']))
                 else:
@@ -43,19 +44,16 @@ class GeneralAgent:
             else "Provide comprehensive explanation suitable for a teacher, including key points and common pitfalls."
         )
         
-        prompt = f"""You are an educational assistant.
-
+        prompt = f"""You are an educational AI.
 {role_instructions}
 
-Conversation history:
+Summary: {summary}
+History:
 {history_text}
 
-Student question: {query}
-
-Provide a helpful, educational answer. Keep it concise but informative.
-Optionally end with one short follow-up question to encourage learning.
-        """
-        from config import settings
+Query: {query}
+Respond concisely.
+"""
         resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
         response = resp.content.strip()
         

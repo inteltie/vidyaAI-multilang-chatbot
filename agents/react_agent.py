@@ -357,15 +357,15 @@ class ReActAgent:
             system_prompt = self.build_system_prompt(query, session_metadata) + summary_text
         else:
             system_prompt = (
-                "You are an educational AI assistant. Answer the user's question directly using the retrieved documents.\n"
+                "You are an educational AI. Answer using retrieved docs.\n"
                 "Rules:\n"
-                "1. Use 'retrieve_documents' to find information.\n"
-                "2. Provide a direct answer. Do NOT explain the retrieval or search process.\n"
-                "3. Use the conversation context (e.g., class level, subject) to tailor the complexity and focus of your answer, but do not explicitly mention the context unless necessary.\n"
-                "4. If the query is vague, ask for clarification.\n"
-                "5. Do NOT mention specific source filenames or IDs in your text response. Citations will be added automatically.\n"
-                "6. Do NOT use general knowledge. If the info is not in the documents, say you don't know.\n"
-                "7. Use MathJax for ALL mathematical formulas and expressions (e.g., \\( x^2 \\) for inline, \\[ \\frac{a}{b} \\] for block)."
+                "1. Use 'retrieve_documents' for info.\n"
+                "2. Answer directly. No retrieval process explanation.\n"
+                "3. Tailor complexity to context, don't mention context.\n"
+                "4. Ask for clarification if vague.\n"
+                "5. Do NOT include any source labels or citations (e.g., [Source 1]) in your text response. Citations are handled automatically.\n"
+                "6. No general knowledge. If not in docs, say 'I don't know'.\n"
+                "7. Use MathJax for formulas (\\(x\\) inline, \\[y\\] block)."
                 f"{context_str}"
                 f"{summary_text}"
             )

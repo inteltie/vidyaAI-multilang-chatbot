@@ -107,9 +107,24 @@ class RetrieverService:
         import hashlib
         import json
 
+        # Intent-based weights (affects cache key)
+        if intent == QueryIntent.CONCEPT_EXPLANATION:
+            alpha = 0.7
+        elif intent == QueryIntent.HOMEWORK_HELP:
+            alpha = 0.4
+        elif intent == QueryIntent.EXAM_PREP:
+            alpha = 0.5
+        else:
+            alpha = 0.6
+
         # 1. Check result cache first (Phase 3: Cost & Scale)
         filter_str = json.dumps(filters or {}, sort_keys=True)
-        retrieval_hash = hashlib.sha256(f"{query_en.lower().strip()}||{filter_str}||{intent.value}".encode()).hexdigest()
+        cache_payload = (
+            f"{query_en.lower().strip()}||{filter_str}||{intent.value}||"
+            f"{settings.pinecone_index}||{settings.embedding_model}||"
+            f"{settings.retriever_top_k}||{alpha}||{bool(self._bm25_encoder)}"
+        )
+        retrieval_hash = hashlib.sha256(cache_payload.encode()).hexdigest()
         retrieval_cache_key = f"rag_res:{retrieval_hash}"
         
         cached_docs = await CacheService.get(retrieval_cache_key)
@@ -126,16 +141,6 @@ class RetrieverService:
         except Exception as exc:  # pragma: no cover
             logger.warning("Embedding failed: %s", exc)
             return []
-
-        # Intent-based weights
-        if intent == QueryIntent.CONCEPT_EXPLANATION:
-            alpha = 0.7
-        elif intent == QueryIntent.HOMEWORK_HELP:
-            alpha = 0.4
-        elif intent == QueryIntent.EXAM_PREP:
-            alpha = 0.5
-        else:
-            alpha = 0.6
 
         # Use provided filters directly for Pinecone with transformation and whitelisting
         metadata_filter: Dict[str, Any] = {}
@@ -253,10 +258,13 @@ class RetrieverService:
         total_time = time.time() - start_time
         logger.info("🎯 Vector DB retrieval completed in %.3f seconds (found %d documents)", total_time, len(documents))
         
+        for i, doc in enumerate(documents, 1):
+            text_snippet = doc.text[:100].replace("\n", " ") if hasattr(doc, 'text') else str(doc.get("text", ""))[:100].replace("\n", " ")
+            logger.info("[RAG_RESULT] Doc %d: score=%.4f, id=%s, text=%s...", i, doc.score if hasattr(doc, 'score') else doc.get("score"), doc.id if hasattr(doc, 'id') else doc.get("id"), text_snippet)
+        
         # Save to cache (Phase 3: Cost & Scale)
         if documents:
             await CacheService.set(retrieval_cache_key, documents, ttl=3600)
             
         return documents
-
 

@@ -1,0 +1,278 @@
+{
+  "session_id": "token_test_3b3b1cbe",
+  "model": "gpt-4o-mini",
+  "base_url": "http://localhost:8001",
+  "turns": 24,
+  "totals": {
+    "user_tokens": 224,
+    "assistant_tokens": 3191,
+    "total_tokens": 3415
+  },
+  "notes": "Token counts are approximate (user+assistant text only).",
+  "results": [
+    {
+      "turn": 1,
+      "language": "en",
+      "description": "English greeting and context",
+      "query": "Hi, I'm Asha. I want to learn science.",
+      "response_preview": "Hi Asha! It's wonderful to meet you! I'm excited to help you learn science. What specific topics are you interested in? Let's explore together!",
+      "latency_s": 3.04548217699994,
+      "user_tokens": 12,
+      "assistant_tokens": 30,
+      "total_tokens": 42
+    },
+    {
+      "turn": 2,
+      "language": "en",
+      "description": "English concept question",
+      "query": "Explain photosynthesis in simple terms.",
+      "response_preview": "Photosynthesis is the process by which green plants use sunlight to turn carbon dioxide from the air and water from the soil into sugar (glucose) for energy. During this process, they also release oxy",
+      "latency_s": 10.636702796999998,
+      "user_tokens": 7,
+      "assistant_tokens": 64,
+      "total_tokens": 71
+    },
+    {
+      "turn": 3,
+      "language": "en",
+      "description": "English follow-up",
+      "query": "What are the main inputs for photosynthesis?",
+      "response_preview": "The main inputs for photosynthesis are:\n\n1. **Light Energy**: Captured by chlorophyll in plant cells.\n2. **Carbon Dioxide (CO₂)**: Absorbed from the air through leaf pores.\n3. **Water (H₂O)**: Taken u",
+      "latency_s": 10.344733984999948,
+      "user_tokens": 9,
+      "assistant_tokens": 77,
+      "total_tokens": 86
+    },
+    {
+      "turn": 4,
+      "language": "hi",
+      "description": "Hindi concept question",
+      "query": "प्रकाश संश्लेषण क्या होता है?",
+      "response_preview": "फोटोसिंथेसिस वह प्रक्रिया है जिसके द्वारा हरे पौधे, शैवाल, और कुछ बैक्टीरिया प्रकाश ऊर्जा को रासायनिक ऊर्जा में परिवर्तित करते हैं। वे ग्लूकोज (एक प्रकार की चीनी) और ऑक्सीजन उत्पन्न करने के लिए सूर्य ",
+      "latency_s": 23.41090394100047,
+      "user_tokens": 9,
+      "assistant_tokens": 175,
+      "total_tokens": 184
+    },
+    {
+      "turn": 5,
+      "language": "hi",
+      "description": "Hindi follow-up",
+      "query": "इसमें कौन-कौन से घटक जरूरी होते हैं?",
+      "response_preview": "प्रकाश संश्लेषण के लिए आवश्यक मुख्य घटक हैं:\n\n1. **प्रकाश ऊर्जा**: सूर्य की रोशनी, जो क्लोरोफिल द्वारा अवशोषित होती है।\n2. **कार्बन डाइऑक्साइड (CO₂)**: वायुमंडल से पौधों द्वारा अवशोषित।\n3. **पानी (H₂O",
+      "latency_s": 20.174766839999393,
+      "user_tokens": 12,
+      "assistant_tokens": 113,
+      "total_tokens": 125
+    },
+    {
+      "turn": 6,
+      "language": "hi",
+      "description": "Hindi example request",
+      "query": "एक छोटा उदाहरण दीजिए।",
+      "response_preview": "क्या आप कृपया स्पष्ट कर सकते हैं कि आप किस विशेष विषय या संदर्भ के लिए एक छोटा उदाहरण चाहते हैं? इससे मुझे एक अधिक प्रासंगिक उत्तर देने में मदद मिलेगी।",
+      "latency_s": 19.93395688199962,
+      "user_tokens": 8,
+      "assistant_tokens": 41,
+      "total_tokens": 49
+    },
+    {
+      "turn": 7,
+      "language": "mr",
+      "description": "Marathi concept question",
+      "query": "प्रकाशसंश्लेषण म्हणजे काय?",
+      "response_preview": "प्रकाश संश्लेषण म्हणजे काय? \n\nप्रकाश संश्लेषण एक प्रक्रिया आहे ज्याद्वारे वनस्पती सूर्यप्रकाश, कार्बन डाइऑक्साइड, आणि पाण्याचा वापर करून ग्लूकोज आणि ऑक्सीजन तयार करतात. \n\nउदाहरण: एक हिरव्या पानाच्या क",
+      "latency_s": 22.002041677000307,
+      "user_tokens": 9,
+      "assistant_tokens": 127,
+      "total_tokens": 136
+    },
+    {
+      "turn": 8,
+      "language": "mr",
+      "description": "Marathi follow-up",
+      "query": "यासाठी कोणती घटक आवश्यक आहेत?",
+      "response_preview": "प्रकाश संश्लेषणासाठी आवश्यक घटक खालीलप्रमाणे आहेत:\n\n1. **सूर्यप्रकाश**: ऊर्जा स्रोत म्हणून कार्य करतो.\n2. **कार्बन डाइऑक्साइड**: वायुमंडलातून घेतला जातो.\n3. **पाणी**: मुळांद्वारे शोषले जाते.\n\nहे घटक ए",
+      "latency_s": 17.408881299000313,
+      "user_tokens": 9,
+      "assistant_tokens": 100,
+      "total_tokens": 109
+    },
+    {
+      "turn": 9,
+      "language": "mr",
+      "description": "Marathi example request",
+      "query": "एक लहान उदाहरण द्या.",
+      "response_preview": "उदाहरणार्थ, एक साधी प्रक्रिया: \n\nएक हिरवी वनस्पती, जसे की टमाटर, सूर्यप्रकाश घेतो. ती कार्बन डाइऑक्साइड व पाणी शोषून घेत, प्रकाश संश्लेषणाद्वारे ग्लूकोज तयार करते. या प्रक्रियेत ऑक्सीजन बाहेर सोडला जा",
+      "latency_s": 19.984842677000415,
+      "user_tokens": 7,
+      "assistant_tokens": 107,
+      "total_tokens": 114
+    },
+    {
+      "turn": 10,
+      "language": "en",
+      "description": "English topic shift",
+      "query": "Switch to math: what is Pythagoras theorem?",
+      "response_preview": "The Pythagorean theorem is a fundamental principle in geometry that relates the sides of a right-angled triangle. It states that the square of the length of the hypotenuse (the side opposite the right",
+      "latency_s": 10.755044133999945,
+      "user_tokens": 12,
+      "assistant_tokens": 133,
+      "total_tokens": 145
+    },
+    {
+      "turn": 11,
+      "language": "en",
+      "description": "English example",
+      "query": "Give a quick example with numbers.",
+      "response_preview": "Consider a right-angled triangle where one leg measures 3 units and the other leg measures 4 units. To find the length of the hypotenuse \\(c\\), we apply the Pythagorean theorem:\n\n\\[ \na^2 + b^2 = c^2 \n",
+      "latency_s": 9.382538020000538,
+      "user_tokens": 7,
+      "assistant_tokens": 138,
+      "total_tokens": 145
+    },
+    {
+      "turn": 12,
+      "language": "hi",
+      "description": "Hindi topic shift",
+      "query": "पायथागोरस का प्रमेय क्या है?",
+      "response_preview": "पाइथागोरस का प्रमेय ज्यामिति में एक प्रमुख सिद्धांत है जो समकोण त्रिकोण के भुजाओं के बीच के संबंध का वर्णन करता है। यह कहता है कि कर्ण (समकोण के विपरीत भुजा) की लंबाई का वर्ग अन्य दो भुजाओं की लंबाई क",
+      "latency_s": 18.50133249300052,
+      "user_tokens": 12,
+      "assistant_tokens": 177,
+      "total_tokens": 189
+    },
+    {
+      "turn": 13,
+      "language": "hi",
+      "description": "Hindi example",
+      "query": "कोई सरल उदाहरण दीजिए।",
+      "response_preview": "एक समकोण त्रिकोण पर विचार करें जहाँ एक भुजा 6 इकाइयाँ मापती है और दूसरी भुजा 8 इकाइयाँ मापती है। कर्ण की लंबाई \\(c\\) ज्ञात करने के लिए, हम पायथागोरस के प्रमेय का उपयोग करते हैं:\n\n\\[ \na^2 + b^2 = c^2 \n",
+      "latency_s": 24.780566479999834,
+      "user_tokens": 8,
+      "assistant_tokens": 177,
+      "total_tokens": 185
+    },
+    {
+      "turn": 14,
+      "language": "mr",
+      "description": "Marathi topic shift",
+      "query": "पायथागोरस प्रमेय काय आहे?",
+      "response_preview": "पायथागोरसचा सिद्धांत हा भूमितीतील एक मूलभूत तत्त्व आहे जो समकोण त्रिकोणाच्या बाजूंचा संबंध दर्शवतो. हा सिद्धांत सांगतो की हायपोटेन्यूसच्या लांबीचा वर्ग (समकोणाच्या विरुद्ध असलेली बाजू) इतर दोन बाजूंच्",
+      "latency_s": 19.578205060000073,
+      "user_tokens": 11,
+      "assistant_tokens": 203,
+      "total_tokens": 214
+    },
+    {
+      "turn": 15,
+      "language": "mr",
+      "description": "Marathi example",
+      "query": "एक सोपा उदाहरण द्या.",
+      "response_preview": "कृपया स्पष्ट करा की तुम्हाला कोणत्या संकल्पनेचा किंवा विषयाचा साधा उदाहरण हवे आहे? यामुळे मला तुमच्या गरजेनुसार उदाहरण देणे सोपे जाईल.",
+      "latency_s": 20.256425921999835,
+      "user_tokens": 7,
+      "assistant_tokens": 43,
+      "total_tokens": 50
+    },
+    {
+      "turn": 16,
+      "language": "en",
+      "description": "English history",
+      "query": "Now history: who was Ashoka?",
+      "response_preview": "Ashoka, also known as Ashoka the Great, was the third emperor of the Maurya Dynasty in ancient India, ruling from around 269 to 232 BCE. He is best known for his role in spreading Buddhism and promoti",
+      "latency_s": 10.556586560999676,
+      "user_tokens": 8,
+      "assistant_tokens": 117,
+      "total_tokens": 125
+    },
+    {
+      "turn": 17,
+      "language": "en",
+      "description": "English follow-up",
+      "query": "Why is he important?",
+      "response_preview": "Ashoka is important for several reasons:\n\n1. **Promotion of Buddhism**: He played a crucial role in spreading Buddhism across India and beyond, influencing its development as a major world religion.\n\n",
+      "latency_s": 10.580682376999903,
+      "user_tokens": 5,
+      "assistant_tokens": 145,
+      "total_tokens": 150
+    },
+    {
+      "turn": 18,
+      "language": "hi",
+      "description": "Hindi history",
+      "query": "सम्राट अशोक कौन थे?",
+      "response_preview": "सम्राट अशोक, जिन्हें अशोक महान के नाम से भी जाना जाता है, मौर्य वंश के तीसरे सम्राट थे, जिन्होंने लगभग 269 से 232 ईसा पूर्व तक शासन किया। वह एक योद्धा राजा से अहिंसा और नैतिक शासन के समर्थक में परिवर्",
+      "latency_s": 23.30922731499959,
+      "user_tokens": 8,
+      "assistant_tokens": 166,
+      "total_tokens": 174
+    },
+    {
+      "turn": 19,
+      "language": "hi",
+      "description": "Hindi follow-up",
+      "query": "वह क्यों महत्वपूर्ण हैं?",
+      "response_preview": "सम्राट अशोक, जिन्हें अशोक महान के नाम से भी जाना जाता है, मौर्य वंश के तीसरे सम्राट थे, जिन्होंने लगभग 269 से 232 ईसा पूर्व तक शासन किया। उन्हें बौद्ध धर्म के प्रचार में उनके महत्वपूर्ण योगदान और एक य",
+      "latency_s": 17.827364947000206,
+      "user_tokens": 6,
+      "assistant_tokens": 178,
+      "total_tokens": 184
+    },
+    {
+      "turn": 20,
+      "language": "mr",
+      "description": "Marathi history",
+      "query": "सम्राट अशोक कोण होते?",
+      "response_preview": "सम्राट अशोक, जिन्हें अशोक महान के नाम से भी जाना जाता है, मौर्य वंश के तीसरे सम्राट थे, जिन्होंने लगभग 269 से 232 ईसा पूर्व तक शासन किया। वह बौद्ध धर्म के प्रचार में उनके महत्वपूर्ण योगदान और एक योद्ध",
+      "latency_s": 20.26315812699977,
+      "user_tokens": 8,
+      "assistant_tokens": 168,
+      "total_tokens": 176
+    },
+    {
+      "turn": 21,
+      "language": "mr",
+      "description": "Marathi follow-up",
+      "query": "तो का महत्त्वाचे आहेत?",
+      "response_preview": "सम्राट अशोक का महत्व कई कारणों से है:\n\n1. **धार्मिक परिवर्तन**: उन्होंने बौद्ध धर्म को अपनाया और इसके प्रचार में महत्वपूर्ण भूमिका निभाई, जिससे अहिंसा और नैतिकता का संदेश फैलाया गया।\n\n2. **साम्राज्य क",
+      "latency_s": 23.144207895999898,
+      "user_tokens": 7,
+      "assistant_tokens": 188,
+      "total_tokens": 195
+    },
+    {
+      "turn": 22,
+      "language": "en",
+      "description": "English summary request",
+      "query": "Summarize everything in 3 bullet points.",
+      "response_preview": "Emperor Ashoka, who reigned from approximately 269 to 232 BCE, is significant for several reasons:\n\n1. **Expansion of the Mauryan Empire**: He expanded the empire to its greatest territorial extent, c",
+      "latency_s": 11.545763834000354,
+      "user_tokens": 10,
+      "assistant_tokens": 208,
+      "total_tokens": 218
+    },
+    {
+      "turn": 23,
+      "language": "hi",
+      "description": "Hindi summary",
+      "query": "अब तक की चर्चा का 3 बिंदुओं में सार बताइए।",
+      "response_preview": "1. **सीखने में रुचि**: आशा ने विज्ञान और गणित में अपनी रुचि व्यक्त की, जैसे कि प्रकाश संश्लेषण और पायथागोरस के प्रमेय जैसे अवधारणाओं के लिए सरल व्याख्याओं की तलाश की।\n\n2. **ऐतिहासिक महत्व**: चर्चा में",
+      "latency_s": 21.955550253999718,
+      "user_tokens": 16,
+      "assistant_tokens": 163,
+      "total_tokens": 179
+    },
+    {
+      "turn": 24,
+      "language": "mr",
+      "description": "Marathi summary",
+      "query": "आत्तापर्यंतचा सारांश 3 मुद्द्यांत द्या.",
+      "response_preview": "1. **शिक्षणातील रस**: आशाने विज्ञान आणि गणितात रस व्यक्त केला, फोटोसिंथेसिस आणि पायथागोरसच्या प्रमेयासारख्या संकल्पनांसाठी सोप्या स्पष्टीकरणांची मागणी केली.\n\n2. **ऐतिहासिक महत्त्व**: चर्चेत सम्राट अशो",
+      "latency_s": 22.101222407999558,
+      "user_tokens": 17,
+      "assistant_tokens": 153,
+      "total_tokens": 170
+    }
+  ]
+}

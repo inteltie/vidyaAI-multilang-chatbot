@@ -1,0 +1,257 @@
+{
+  "session_id": "token_test_en_c15ac0",
+  "user_id": "student_en_chem",
+  "model": "gpt-4o-mini",
+  "base_url": "http://localhost:8001",
+  "turns": 22,
+  "totals": {
+    "user_tokens": 234,
+    "assistant_tokens": 3552,
+    "total_tokens": 3786
+  },
+  "notes": "Token counts are approximate (user+assistant text only).",
+  "results": [
+    {
+      "turn": 1,
+      "language": "en",
+      "description": "English greeting and context",
+      "query": "Hi, I am Riya from Class 12. I need help with chemistry.",
+      "response_preview": "Hello Riya! How can I assist you with chemistry? Are there specific topics or concepts you need help with?",
+      "latency_s": 12.827479159999712,
+      "user_tokens": 17,
+      "assistant_tokens": 23,
+      "total_tokens": 40
+    },
+    {
+      "turn": 2,
+      "language": "en",
+      "description": "Kinetics definition",
+      "query": "Define chemical kinetics and the rate of reaction.",
+      "response_preview": "Chemical kinetics is the branch of chemistry that studies the rates of chemical reactions and the factors affecting these rates. The rate of reaction is defined as the change in concentration of react",
+      "latency_s": 7.275054024000383,
+      "user_tokens": 9,
+      "assistant_tokens": 119,
+      "total_tokens": 128
+    },
+    {
+      "turn": 3,
+      "language": "en",
+      "description": "Kinetics rate law",
+      "query": "Explain the rate law and rate constant with an example.",
+      "response_preview": "The rate law expresses the relationship between the rate of a chemical reaction and the concentration of its reactants. It is generally formulated as:\n\nRate = k[A]^m[B]^n\n\nHere, k is the rate constant",
+      "latency_s": 7.87195230099951,
+      "user_tokens": 11,
+      "assistant_tokens": 165,
+      "total_tokens": 176
+    },
+    {
+      "turn": 4,
+      "language": "en",
+      "description": "Arrhenius equation",
+      "query": "What is the Arrhenius equation? Explain terms.",
+      "response_preview": "The Arrhenius equation describes how the rate constant (k) of a chemical reaction depends on temperature (T) and activation energy (EA). It is expressed as:\n\nk = A * e^(-EA/RT)\n\nWhere:\n- k = rate cons",
+      "latency_s": 8.819345116000477,
+      "user_tokens": 11,
+      "assistant_tokens": 148,
+      "total_tokens": 159
+    },
+    {
+      "turn": 5,
+      "language": "en",
+      "description": "Temperature effect",
+      "query": "How does temperature affect reaction rate? Use Arrhenius reasoning.",
+      "response_preview": "Temperature significantly affects reaction rates, as described by the Arrhenius equation. As temperature increases, the kinetic energy of molecules also increases, leading to more frequent and energet",
+      "latency_s": 5.926425925000331,
+      "user_tokens": 13,
+      "assistant_tokens": 126,
+      "total_tokens": 139
+    },
+    {
+      "turn": 6,
+      "language": "en",
+      "description": "Activation energy",
+      "query": "Explain activation energy and how catalysts lower it.",
+      "response_preview": "Activation energy (EA) is the minimum energy required for reactants to undergo a chemical reaction and form products. It represents the energy barrier that must be overcome for the reaction to proceed",
+      "latency_s": 5.329261168999437,
+      "user_tokens": 9,
+      "assistant_tokens": 91,
+      "total_tokens": 100
+    },
+    {
+      "turn": 7,
+      "language": "en",
+      "description": "Order of reaction",
+      "query": "Distinguish between zero, first, and second order reactions.",
+      "response_preview": "Reactions can be classified based on their order, which indicates how the rate depends on the concentration of reactants:\n\n1. **Zero Order Reactions**: The rate is constant and independent of reactant",
+      "latency_s": 7.984466130999863,
+      "user_tokens": 13,
+      "assistant_tokens": 192,
+      "total_tokens": 205
+    },
+    {
+      "turn": 8,
+      "language": "en",
+      "description": "Half-life",
+      "query": "For a first order reaction, derive half-life expression.",
+      "response_preview": "To derive the half-life expression for a first-order reaction, we start with the rate law:\n\n\\[ \\text{Rate} = -\\frac{d[A]}{dt} = k[A] \\]\n\nIntegrating this equation, we rearrange it to:\n\n\\[ -\\int_{[A]_0",
+      "latency_s": 8.498601613000574,
+      "user_tokens": 11,
+      "assistant_tokens": 244,
+      "total_tokens": 255
+    },
+    {
+      "turn": 9,
+      "language": "en",
+      "description": "Experimental determination",
+      "query": "How do you determine reaction order experimentally?",
+      "response_preview": "To determine the reaction order experimentally, several methods can be employed:\n\n1. **Method of Initial Rates**: Measure the initial rate of reaction at varying concentrations of reactants. By analyz",
+      "latency_s": 7.777784828999756,
+      "user_tokens": 8,
+      "assistant_tokens": 220,
+      "total_tokens": 228
+    },
+    {
+      "turn": 10,
+      "language": "en",
+      "description": "Kinetics theory",
+      "query": "Explain collision theory and transition state theory.",
+      "response_preview": "**Collision Theory** posits that for a chemical reaction to occur, reactant molecules must collide with sufficient energy and the correct orientation. Key components include:\n\n- **Collision Frequency*",
+      "latency_s": 10.784109725000235,
+      "user_tokens": 8,
+      "assistant_tokens": 206,
+      "total_tokens": 214
+    },
+    {
+      "turn": 11,
+      "language": "en",
+      "description": "NN topic shift",
+      "query": "Now switch to neural networks: define perceptron.",
+      "response_preview": "A **perceptron** is the fundamental building block of a neural network, representing a single artificial neuron. It processes input data through the following steps:\n\n1. **Input Weights**: Each input ",
+      "latency_s": 6.011519026999849,
+      "user_tokens": 11,
+      "assistant_tokens": 119,
+      "total_tokens": 130
+    },
+    {
+      "turn": 12,
+      "language": "en",
+      "description": "Backpropagation",
+      "query": "Explain backpropagation in simple steps.",
+      "response_preview": "Backpropagation is a method used in neural networks to update weights and minimize error. Here are the simple steps:\n\n1. **Forward Pass**: Input data is passed through the network, and predictions are",
+      "latency_s": 5.733946642000774,
+      "user_tokens": 8,
+      "assistant_tokens": 163,
+      "total_tokens": 171
+    },
+    {
+      "turn": 13,
+      "language": "en",
+      "description": "Activation functions",
+      "query": "What is the role of activation functions like ReLU and sigmoid?",
+      "response_preview": "Activation functions like **ReLU (Rectified Linear Unit)** and **sigmoid** play crucial roles in neural networks:\n\n1. **ReLU**: It outputs the input directly if it's positive; otherwise, it outputs ze",
+      "latency_s": 5.839215758000137,
+      "user_tokens": 13,
+      "assistant_tokens": 127,
+      "total_tokens": 140
+    },
+    {
+      "turn": 14,
+      "language": "en",
+      "description": "Regularization",
+      "query": "Explain overfitting and how dropout helps.",
+      "response_preview": "**Overfitting** occurs when a model learns the training data too well, capturing noise and details that do not generalize to new data. This results in high accuracy on training data but poor performan",
+      "latency_s": 5.525096059000134,
+      "user_tokens": 9,
+      "assistant_tokens": 110,
+      "total_tokens": 119
+    },
+    {
+      "turn": 15,
+      "language": "en",
+      "description": "Architecture comparison",
+      "query": "Compare CNNs and RNNs with use cases.",
+      "response_preview": "**Convolutional Neural Networks (CNNs)** and **Recurrent Neural Networks (RNNs)** are specialized architectures in deep learning, each suited for different types of data.\n\n### CNNs:\n- **Architecture**",
+      "latency_s": 13.982611667000128,
+      "user_tokens": 11,
+      "assistant_tokens": 250,
+      "total_tokens": 261
+    },
+    {
+      "turn": 16,
+      "language": "en",
+      "description": "Classical conditioning",
+      "query": "Now psychology: explain classical conditioning with Pavlov.",
+      "response_preview": "**Classical Conditioning** is a learning process where a neutral stimulus becomes associated with a meaningful stimulus, leading to a conditioned response. This concept was famously demonstrated by Iv",
+      "latency_s": 10.49102676199982,
+      "user_tokens": 10,
+      "assistant_tokens": 176,
+      "total_tokens": 186
+    },
+    {
+      "turn": 17,
+      "language": "en",
+      "description": "Stimulus differentiation",
+      "query": "Differentiate unconditioned vs conditioned stimulus.",
+      "response_preview": "**Unconditioned Stimulus (UCS)** and **Conditioned Stimulus (CS)** are key concepts in classical conditioning:\n\n### Unconditioned Stimulus (UCS):\n- **Definition**: A stimulus that naturally and automa",
+      "latency_s": 9.524155496000276,
+      "user_tokens": 9,
+      "assistant_tokens": 170,
+      "total_tokens": 179
+    },
+    {
+      "turn": 18,
+      "language": "en",
+      "description": "Learning effects",
+      "query": "Explain extinction and spontaneous recovery.",
+      "response_preview": "**Extinction** and **Spontaneous Recovery** are important concepts in classical conditioning:\n\n### Extinction:\n- **Definition**: Extinction occurs when a conditioned response (CR) weakens and eventual",
+      "latency_s": 11.505487129999892,
+      "user_tokens": 6,
+      "assistant_tokens": 204,
+      "total_tokens": 210
+    },
+    {
+      "turn": 19,
+      "language": "en",
+      "description": "History",
+      "query": "Humanities: Who was Akbar and what is Sulh-i-Kul?",
+      "response_preview": "**Akbar** (1542-1605) was the third Mughal emperor, known for his significant contributions to the Indian subcontinent's history. He expanded the Mughal Empire, implemented administrative reforms, and",
+      "latency_s": 10.82037048500024,
+      "user_tokens": 16,
+      "assistant_tokens": 124,
+      "total_tokens": 140
+    },
+    {
+      "turn": 20,
+      "language": "en",
+      "description": "Renaissance",
+      "query": "Explain the Renaissance and its impact on Europe.",
+      "response_preview": "The **Renaissance** (14th to 17th century) was a transformative cultural movement in Europe, marking the transition from the Middle Ages to modernity. Originating in Italy, it emphasized a revival of ",
+      "latency_s": 10.448288741999932,
+      "user_tokens": 9,
+      "assistant_tokens": 239,
+      "total_tokens": 248
+    },
+    {
+      "turn": 21,
+      "language": "en",
+      "description": "Summary request",
+      "query": "Summarize the key topics in 5 bullet points.",
+      "response_preview": "The **Renaissance** (14th to 17th century) was a pivotal cultural movement in Europe, marking the transition from the Middle Ages to modernity. Originating in Italy, it emphasized a revival of classic",
+      "latency_s": 6.646138414999768,
+      "user_tokens": 12,
+      "assistant_tokens": 215,
+      "total_tokens": 227
+    },
+    {
+      "turn": 22,
+      "language": "en",
+      "description": "Exam questions",
+      "query": "Give 3 exam-style questions from these topics.",
+      "response_preview": "Here are three exam-style questions based on the Renaissance and its impact on Europe:\n\n1. **Art and Literature**: Discuss how the works of Renaissance artists and writers reflect the principles of hu",
+      "latency_s": 9.522836268999527,
+      "user_tokens": 10,
+      "assistant_tokens": 121,
+      "total_tokens": 131
+    }
+  ]
+}

@@ -14,15 +14,23 @@ def merge_timings(left: Dict[str, float], right: Dict[str, float]) -> Dict[str, 
 
 
 def merge_citations(left: List[Citation], right: List[Citation]) -> List[Citation]:
-    """Merge or replace citations. 
-    In parallel RAG + Agent, Agent usually sets final citations.
-    However, if we want to keep both, we should append.
-    For this app, the Agent's citations are the final word on what was actually used.
-    But to avoid conflict, we allow merging."""
-    # Simple strategy: append unique by ID if possible, or just append
-    if not left: return right
-    if not right: return left
-    return left + right
+    """Merge citations ensuring uniqueness by document ID."""
+    if not left: return right or []
+    if not right: return left or []
+    
+    # Combined list
+    combined = (left or []) + (right or [])
+    
+    # Ensure uniqueness by ID
+    seen_ids = set()
+    unique_citations = []
+    for citation in combined:
+        cite_id = citation.get("id")
+        if cite_id not in seen_ids:
+            unique_citations.append(citation)
+            seen_ids.add(cite_id)
+            
+    return unique_citations
 
 
 def merge_metadata(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:

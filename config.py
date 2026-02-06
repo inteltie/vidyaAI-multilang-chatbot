@@ -52,6 +52,9 @@ class Settings(BaseModel):
     validation_tokens: int = Field(300, description="Max tokens for response validation")
     memory_buffer_size: int = Field(10, description="Number of turns to keep in memory buffer")
     memory_token_limit: int = Field(2000, description="Max tokens for conversation history buffer")
+    memory_buffer_ttl: int = Field(7200, description="Redis buffer TTL (seconds)")
+    summary_max_tokens: int = Field(400, description="Max tokens for conversation summary")
+    max_chunk_tokens: int = Field(800, description="Max tokens per RAG chunk to prevent prompt bloating")
     
     # Agents
     max_iterations: int = Field(5, description="Max ReAct agent iterations")
@@ -59,11 +62,14 @@ class Settings(BaseModel):
     validation_mode: Literal["strict", "fast", "disabled"] = Field("fast", description="Groundedness validation mode")
     enable_query_caching: bool = Field(True, description="Enable caching for query analysis")
     cache_size: int = Field(1000, description="Size of query analysis cache")
+    query_cache_ttl: int = Field(1800, description="Query classification cache TTL (seconds)")
+    resolved_query_cache_ttl: int = Field(7200, description="Resolved query cache TTL (seconds)")
     parallel_rag_fetch: bool = Field(True, description="Enable parallel RAG retrieval")
     
     # Retrieval
     retriever_top_k: int = Field(5, description="Number of documents to retrieve")
     retriever_score_threshold: float = Field(0.4, description="Minimum similarity score for retrieval")
+    rag_quality_high_score: float = Field(0.65, description="Score threshold for high-quality RAG")
 
     class Config:
         """Pydantic configuration."""
@@ -95,18 +101,24 @@ class Settings(BaseModel):
             "query_analysis_tokens": int(os.getenv("QUERY_ANALYSIS_TOKENS") or 100),
             "main_response_tokens": int(os.getenv("MAIN_RESPONSE_TOKENS") or 2000),
             "validation_tokens": int(os.getenv("VALIDATION_TOKENS") or 300),
-            "memory_buffer_size": int(os.getenv("MEMORY_BUFFER_SIZE") or 20),
+            "memory_buffer_size": int(os.getenv("MEMORY_BUFFER_SIZE") or 10),
             "memory_token_limit": int(os.getenv("MEMORY_TOKEN_LIMIT") or 2000),
+            "memory_buffer_ttl": int(os.getenv("MEMORY_BUFFER_TTL") or 7200),
+            "summary_max_tokens": int(os.getenv("SUMMARY_MAX_TOKENS") or 400),
+            "max_chunk_tokens": int(os.getenv("MAX_CHUNK_TOKENS") or 800),
             
             "max_iterations": int(os.getenv("MAX_ITERATIONS") or 5),
             "web_search_enabled": str_to_bool(os.getenv("WEB_SEARCH_ENABLED"), True),
             "validation_mode": (os.getenv("VALIDATION_MODE") or "fast").lower(),
             "enable_query_caching": str_to_bool(os.getenv("ENABLE_QUERY_CACHING", "True")),
             "cache_size": int(os.getenv("CACHE_SIZE") or 1000),
+            "query_cache_ttl": int(os.getenv("QUERY_CACHE_TTL") or 1800),
+            "resolved_query_cache_ttl": int(os.getenv("RESOLVED_QUERY_CACHE_TTL") or 7200),
             "parallel_rag_fetch": str_to_bool(os.getenv("PARALLEL_RAG_FETCH"), True),
             
-            "retriever_top_k": int(os.getenv("RETRIEVER_TOP_K") or 5),
-            "retriever_score_threshold": float(os.getenv("RETRIEVER_SCORE_THRESHOLD") or 0.4),
+            "retriever_top_k": int(os.getenv("RETRIEVER_TOP_K") or 3),
+            "retriever_score_threshold": float(os.getenv("RETRIEVER_SCORE_THRESHOLD") or 0.45),
+            "rag_quality_high_score": float(os.getenv("RAG_QUALITY_HIGH_SCORE") or 0.65),
         }
         
         # Filter out None values to allow Pydantic to raise validation errors for required fields

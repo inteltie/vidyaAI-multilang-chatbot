@@ -88,16 +88,27 @@ class RetrieveDocumentsNode:
         
         # Process RAG results
         if docs:
+            from config import settings
+            min_score = settings.retriever_score_threshold
+            high_score_threshold = settings.rag_quality_high_score
+
+            # Ensure deterministic ordering by score
+            docs = sorted(docs, key=lambda d: d.get("score", 0.0), reverse=True)
+
             # Filter for state["documents"] as well to ensure validator uses high-score docs
-            high_score_docs = [d for d in docs if d.get("score", 0.0) >= 0.45]
+            high_score_docs = [d for d in docs if d.get("score", 0.0) >= min_score]
             state["documents"] = high_score_docs
             
-            top_score = docs[0].get("score", 0)
+            top_score = docs[0].get("score", 0.0)
             
             # Only add RAG results to prefilled_observations if they pass the threshold
-            if top_score >= 0.45:
+            if top_score >= min_score:
+                # Log the selection
+                for d in high_score_docs:
+                    logger.info("[PROACTIVE_RAG] Selected: id=%s, score=%.4f", d.get("id"), d.get("score"))
+                
                 from tools import RetrievalTool
-                obs_text = RetrievalTool.format_documents(docs, min_score=0.45)
+                obs_text = RetrievalTool.format_documents(docs, min_score=min_score)
                 state["prefilled_observations"].append({
                     "tool": "retrieve_documents",
                     "args": {"query": query_en, "filters": request_filters},
@@ -105,13 +116,13 @@ class RetrieveDocumentsNode:
                 })
                 
                 # Assess RAG quality
-                if top_score > 0.65:
+                if top_score >= high_score_threshold:
                     state["rag_quality"] = "high"
                 else:
                     state["rag_quality"] = "medium"
             else:
                 state["rag_quality"] = "low"
-                logger.info("Top RAG score %.3f below 0.45 threshold. Bypassing RAG documents.", top_score)
+                logger.info("Top RAG score %.3f below %.2f threshold. Bypassing RAG documents.", top_score, min_score)
             
             logger.info("Found %d docs. Quality: %s (Score: %.3f)", 
                         len(docs), state["rag_quality"], top_score)

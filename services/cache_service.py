@@ -72,6 +72,39 @@ class CacheService:
         except Exception as e:
             logger.warning("Unexpected error during cache set for key %s: %s", key, e)
 
+    @classmethod
+    async def incr_hash(cls, key: str, field: str, amount: int = 1):
+        """Increment a hash field by amount."""
+        try:
+            redis = await cls.get_redis()
+            await redis.hincrby(key, field, amount)
+        except (RedisError, TypeError) as e:
+            logger.warning("Cache hash incr failed for key %s field %s: %s", key, field, e)
+        except Exception as e:
+            logger.warning("Unexpected error during cache hash incr for key %s: %s", key, e)
+
+    @classmethod
+    async def pop_hash(cls, key: str) -> dict:
+        """
+        Fetch all fields from a hash and delete the key (consume).
+        Returns dict of field -> int.
+        """
+        try:
+            redis = await cls.get_redis()
+            async with redis.pipeline() as pipe:
+                await pipe.hgetall(key)
+                await pipe.delete(key)
+                data, _ = await pipe.execute()
+            if not data:
+                return {}
+            return {k: int(v) for k, v in data.items()}
+        except (RedisError, ValueError, TypeError) as e:
+            logger.warning("Cache pop_hash failed for key %s: %s", key, e)
+            return {}
+        except Exception as e:
+            logger.warning("Unexpected error during cache pop_hash for key %s: %s", key, e)
+            return {}
+
     @staticmethod
     def generate_key(prefix: str, *args, **kwargs) -> str:
         """

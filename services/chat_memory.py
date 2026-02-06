@@ -8,6 +8,7 @@ import redis.asyncio as aioredis
 from pymongo.errors import DuplicateKeyError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage, trim_messages
+import tiktoken
 
 from models import ChatSession, ChatMessage
 from state import ConversationTurn
@@ -27,6 +28,28 @@ class MemoryService:
         self._memory_token_limit = getattr(settings, "memory_token_limit", 2000)
         self.SESSION_RESTART_THRESHOLD = 7200  # 2 hours in seconds
         self._tokenizer_warmed = False
+        self._summary_max_tokens = getattr(settings, "summary_max_tokens", 400)
+        self._summary_encoder = None
+
+    def _get_summary_encoder(self):
+        if self._summary_encoder is not None:
+            return self._summary_encoder
+        model_name = getattr(self._llm, "model_name", None) or settings.model_name
+        try:
+            self._summary_encoder = tiktoken.encoding_for_model(model_name)
+        except Exception:
+            self._summary_encoder = tiktoken.get_encoding("cl100k_base")
+        return self._summary_encoder
+
+    def _truncate_summary(self, text: str) -> str:
+        if not text:
+            return text
+        enc = self._get_summary_encoder()
+        tokens = enc.encode(text)
+        if len(tokens) <= self._summary_max_tokens:
+            return text
+        truncated = enc.decode(tokens[: self._summary_max_tokens])
+        return truncated.rstrip() + " …"
 
     async def warmup(self):
         """Pre-load tiktoken encodings to avoid cold-start delays on first use."""
@@ -92,7 +115,7 @@ class MemoryService:
                 
                 if buffer:
                     await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
-                    await self._redis.expire(redis_key, 3600) # 1 hour TTL
+                    await self._redis.expire(redis_key, settings.memory_buffer_ttl)
         except Exception as e:
             logger.warning(f"Redis fallback in ensure_session for {session_id}: {e}")
             # Fallback: Load directly from MongoDB
@@ -137,13 +160,14 @@ class MemoryService:
                     messages.append(AIMessage(content=m.text))
 
         # Perform token-based trimming (keep last N tokens)
+        # Enforce turn limit (buffer_size) BEFORE token limit
         trimmed_history = trim_messages(
-            messages,
+            messages[-settings.memory_buffer_size:],
             max_tokens=self._memory_token_limit,
             strategy="last",
-            token_counter=self._llm, # Uses the model's tokenizer if available
+            token_counter=self._llm,
             start_on="human",
-            include_system=False, # Summary will be in system prompt
+            include_system=False,
         )
 
         return summary, trimmed_history
@@ -168,7 +192,7 @@ class MemoryService:
                 # Keep Redis buffer slightly larger than default for safety
                 redis_buffer_limit = settings.memory_buffer_size + 10
                 await pipe.ltrim(redis_key, -redis_buffer_limit, -1)
-                await pipe.expire(redis_key, 3600)
+                await pipe.expire(redis_key, settings.memory_buffer_ttl)
                 await pipe.execute()
         except Exception as e:
             logger.warning(f"Skipping Redis update for {session_id} due to connection error: {e}")
@@ -226,7 +250,7 @@ class MemoryService:
                         f"Here is a summary of the conversation so far:\n{session.summary}\n\n"
                         f"Here are the latest 20 messages:\n{messages_text}\n\n"
                         "Update the summary to include the new information, keeping it concise (3-5 sentences). "
-                        "Focus on key topics and user preferences."
+                        "Preserve key topics, constraints, and user preferences."
                     )
                 else:
                     prompt = (
@@ -234,8 +258,26 @@ class MemoryService:
                         f"{messages_text}"
                     )
                 
-                response = await self._llm.ainvoke(prompt)
-                summary = response.content.strip()
+                response = await self._llm.ainvoke(
+                    prompt,
+                    config={"max_tokens": self._summary_max_tokens},
+                )
+                summary = self._truncate_summary(response.content.strip())
+                
+                # Track token usage for background summarization
+                usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
+                if usage:
+                    i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+                    o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+                    total_tokens = usage.get("total_tokens") or (i_tokens + o_tokens)
+                    try:
+                        from services.cache_service import CacheService
+                        key = f"bg_tokens:{session_id}"
+                        await CacheService.incr_hash(key, "input_tokens", int(i_tokens))
+                        await CacheService.incr_hash(key, "output_tokens", int(o_tokens))
+                        await CacheService.incr_hash(key, "total_tokens", int(total_tokens))
+                    except Exception as e:
+                        logger.debug("Failed to record background token usage: %s", e)
                 
                 # 2. Atomic update for summary AND lock release
                 # We use find_one().update() or just ChatSession.find(...).update()
@@ -299,7 +341,7 @@ class MemoryService:
                     buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
                     if buffer:
                         await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
-                        await self._redis.expire(redis_key, 3600)
+                        await self._redis.expire(redis_key, settings.memory_buffer_ttl)
             except Exception as e:
                 logger.warning(f"Redis fallback in load_session_full for {session_id}: {e}")
                 # Fallback to MongoDB
@@ -317,7 +359,7 @@ class MemoryService:
                 messages.append(AIMessage(content=content))
 
         trimmed_history = trim_messages(
-            messages,
+            messages[-settings.memory_buffer_size:],
             max_tokens=self._memory_token_limit,
             strategy="last",
             token_counter=self._llm,

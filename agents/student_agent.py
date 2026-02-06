@@ -128,7 +128,7 @@ Focus: {identity['focus']}
 2. **NO UNPROMPTED RECAPS**: Do not mention or repeat previous topics, questions, or summaries unless the student explicitly asks to "continue", "tell me more", or "expand further".
 3. **AMBIGUITY HANDLING**: If the student's message is vague or ambiguous, politely ask for clarification instead of guessing based on history.
 4. **NO META-TALK**: Never say "I searched" or "Based on documents".
-5. **Citations**: Use labels like `[Source 1]`, `[Source 2]` at the end of relevant sentences to cite your sources.
+5. **Citations [STRICT]**: Do NOT include any source labels or citations (e.g., [Source 1]) in your text.
 6. **Target Language [STRICT]**: {target_lang}.
 7. **Efficiency**: {efficiency_instruction}
 8. **NO EXTERNAL LINKS [MANDATORY]**: Never mention or link to external websites, platforms, or tools (e.g., Coursera, Khan Academy, Wikipedia, YouTube). Use ONLY the provided local information. 
@@ -137,7 +137,7 @@ Focus: {identity['focus']}
 
 HOW TO RESPOND:
 - Provide your response in {target_lang}, strictly embodying **{identity['name']}** through the rules above.
-- Cite sources using `[Source X]` format.
+- Do NOT use any source labels or citations in the text.
 - Stick to the **50-100 token limit** unless detail is specifically requested.
 """
         return prompt

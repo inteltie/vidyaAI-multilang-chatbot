@@ -33,6 +33,7 @@ class AnalyzeQueryNode:
         
         query = state["query"]
         history = state.get("conversation_history", [])
+        user_session_id = state.get("user_session_id")
         
         # Phase 5: Query Summarization for large inputs
         final_query = query
@@ -64,11 +65,35 @@ class AnalyzeQueryNode:
         # Phase 6: Sequential Analysis (Speculative RAG disabled for stability)
         import asyncio
         try:
-            # Classification task with 15s timeout
-            result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
+            # Heuristic: cheap follow-up resolution using cached context to avoid extra tokens
+            followup_phrases = {
+                "why", "how", "what", "explain", "explain more", "more",
+                "elaborate", "tell me more", "again", "details", "detail",
+                "give example", "examples", "example"
+            }
+            query_norm = final_query.lower().strip()
+            is_followup = query_norm in followup_phrases or len(query_norm.split()) <= 3
+            cached_resolved = None
+            if is_followup and user_session_id:
+                try:
+                    from services.cache_service import CacheService
+                    cached_resolved = await CacheService.get(f"resolved_query:{user_session_id}")
+                except Exception as e:
+                    logger.debug("Resolved query cache lookup failed: %s", e)
+
+            if cached_resolved and is_followup:
+                result = QueryClassification(
+                    query_type="curriculum_specific",
+                    translated_query=f"{cached_resolved}. Follow-up: {final_query}",
+                    confidence=0.8,
+                    reasoning="Used cached resolved query for short follow-up.",
+                    subjects=["General"]
+                )
+            else:
+                # Classification task with 15s timeout
+                result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
         except asyncio.TimeoutError:
             logger.warning("Query classification timed out after 15s")
-            from services.query_classifier import QueryClassification
             result = QueryClassification(
                 query_type="curriculum_specific",
                 translated_query=final_query,
@@ -78,7 +103,6 @@ class AnalyzeQueryNode:
             )
         except Exception as e:
             logger.error("Query classification failed: %s", e)
-            from services.query_classifier import QueryClassification
             result = QueryClassification(
                 query_type="curriculum_specific",
                 translated_query=final_query,
@@ -91,7 +115,10 @@ class AnalyzeQueryNode:
             "query_en": result.translated_query,
             "query_type": result.query_type,
             "subjects": result.subjects,
-            "llm_calls": 1,
+            "llm_calls": 0 if (
+                result.reasoning.startswith("Used cached resolved query") or
+                result.reasoning.startswith("Cached result")
+            ) else 1,
             "input_tokens": updates["input_tokens"] + result.input_tokens,
             "output_tokens": updates["output_tokens"] + result.output_tokens,
         })
@@ -120,6 +147,19 @@ class AnalyzeQueryNode:
         # If we had a heuristic match, mark that we skipped the LLM
         if result.confidence >= 1.0 and "Matched" in result.reasoning:
             updates["llm_calls"] = 0
+        
+        # Cache resolved query for cheap follow-up handling
+        if user_session_id and result.translated_query:
+            try:
+                from services.cache_service import CacheService
+                from config import settings
+                await CacheService.set(
+                    f"resolved_query:{user_session_id}",
+                    result.translated_query,
+                    ttl=settings.resolved_query_cache_ttl
+                )
+            except Exception as e:
+                logger.debug("Resolved query cache set failed: %s", e)
         
         duration = perf_counter() - start
         updates["timings"] = {"analyze_query": duration}

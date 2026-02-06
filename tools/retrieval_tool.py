@@ -91,6 +91,7 @@ class RetrievalTool(Tool):
             if kwargs:
                 logger.info("Ignoring LLM-extracted filters for search: %s", kwargs)
 
+            from config import settings
             docs: List[Document] = await self._retriever.retrieve(
                 query_en=query,
                 filters=filters,
@@ -100,18 +101,23 @@ class RetrievalTool(Tool):
             if not docs:
                 return f"No documents found for query: '{query}'"
             
-            return self.format_documents(docs, min_score=0.450)
+            return self.format_documents(docs, min_score=settings.retriever_score_threshold)
         except Exception as exc:
             logger.error("[TRACE] RetrievalTool.execute FAILED: %s", exc)
             return f"Error during retrieval: {str(exc)}"
 
     @staticmethod
-    def format_documents(docs: List[Document], min_score: float = 0.45) -> str:
-        """Format documents for agent observation with minimal metadata."""
+    def format_documents(docs: List[Document], min_score: float | None = None) -> str:
+        """Format documents for agent observation with truncation."""
         if not docs:
             return "No documents found."
             
-        # Filter docs by score (Code-level filtering)
+        from config import settings
+        if min_score is None:
+            min_score = settings.retriever_score_threshold
+        max_tokens = settings.max_chunk_tokens
+        
+        # Filter docs by score
         docs = [d for d in docs if d.get("score", 0.0) >= min_score]
         
         if not docs:
@@ -120,8 +126,13 @@ class RetrievalTool(Tool):
         result = f"Found {len(docs)} relevant documents (Top 5 shown):\n\n"
         for i, doc in enumerate(docs[:5], 1):
             text_content = doc.get("text", "")
-            # Strictly ONLY Text and Score to avoid LLM distraction
-            # Metadata is preserved in state["documents"] for final citation array
+            
+            # Simple heuristic for truncation if tiktoken not easily available here
+            # 1 token approx 4 chars. 800 tokens approx 3200 chars.
+            char_limit = max_tokens * 4
+            if len(text_content) > char_limit:
+                text_content = text_content[:char_limit] + "... [Truncated for brevity]"
+                
             result += f"Source {i} [Score: {doc.get('score', 0):.2f}]: {text_content}\n\n"
         
         if len(docs) > 5:

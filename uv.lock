@@ -1327,6 +1327,7 @@ dependencies = [
     { name = "pinecone-text" },
     { name = "python-dotenv" },
     { name = "redis" },
+    { name = "tiktoken" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1343,6 +1344,7 @@ requires-dist = [
     { name = "pinecone-text" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "redis", specifier = ">=5.0.0" },
+    { name = "tiktoken" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 

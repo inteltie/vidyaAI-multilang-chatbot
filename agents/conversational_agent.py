@@ -3,6 +3,7 @@
 import logging
 from langchain_openai import ChatOpenAI
 from state import AgentState
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,13 @@ class ConversationalAgent:
             summary = state.get("session_metadata", {}).get("summary", "")
             
             history_text = ""
-            for m in history[-12:]: 
+            for m in history[-settings.memory_buffer_size:]: 
                 role = "STUDENT" if m.type == "human" else "VIDYA"
                 history_text += f"{role}: {m.content}\n"
             
             # Log history tokens
             try:
-                history_tokens = self._llm.get_num_tokens_from_messages(history[-12:])
+                history_tokens = self._llm.get_num_tokens_from_messages(history[-settings.memory_buffer_size:])
                 logger.info("[TOKEN_USAGE] Context: chat_history_tokens=%d", history_tokens)
             except Exception as e:
                 logger.debug("Failed to calculate history tokens: %s", e)
@@ -57,20 +58,16 @@ class ConversationalAgent:
             
             target_lang = state.get("language", "en")
             prompt = (
-                f"You are Vidya, a friendly and helpful educational assistant. "
-                f"Respond naturally to the student's message in **{target_lang}**. "
-                f"IMPORTANT: Use the history below to see if the student shared their name and use it.\n"
-                f"{'NOTICE: This is a returning student after some time away. Welcome them back warmly.' if is_restart else ''}\n\n"
-                f"Conversation Summary: {summary}\n"
-                f"Recent Interaction History:\n{history_text}\n"
-                f"Latest Message from Student: {state['query']}\n\n"
-                f"Response Guidelines:\n"
-                f"- Be warm and personalized.\n"
-                f"- Your response MUST be in **{target_lang}**.\n"
-                f"- If the student shared their name earlier, use it.\n"
-                f"- {'CRITICAL: This is MID-CONVERSATION (history exists). DO NOT greet with Hello/Hi/Namaste. Just respond naturally to their message.' if has_history else 'This is the FIRST message. Greet warmly and ask how you can help.'}\n"
-                f"- Keep the response brief and encouraging (under 100 tokens).")
-            from config import settings
+                f"You are Vidya, a friendly educational assistant. "
+                f"Respond in **{target_lang}**. "
+                f"{'Welcome back.' if is_restart else ''}\n\n"
+                f"Summary: {summary}\n"
+                f"History:\n{history_text}\n"
+                f"Message: {state['query']}\n\n"
+                f"Rules:\n"
+                f"- Be warm. Use name if known.\n"
+                f"- {'NO Hello/Hi (mid-convo).' if has_history else 'Greet warmly.'}\n"
+                f"- Brief (<100 tokens).")
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
             updates["response"] = resp.content.strip()
             
