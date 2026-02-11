@@ -46,19 +46,28 @@ class QueryClassifier:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
         
-        # 1. Conversational keywords (only if they are the ONLY word/phrase)
+        # 1. Conversational keywords (only if they are the ONLY word/phrase or have a question mark)
         conversational_keywords = {
-            "hi", "hello", "hey", "greetings",
+            "hi", "hello", "hey", "greetings", "hi?", "hello?", "hey?",
             "thanks", "thank you", "thx", "cool", "ok", "okay", "got it",
-            "bye", "goodbye", "see ya", "nice", "great", "awesome", "yep", "yes", "no"
+            "bye", "goodbye", "see ya", "nice", "great", "awesome", "yep", "yes", "no",
+            "how are you", "how are you doing", "how are you today", "how are you doing today", "how's it going",
+            "what's up", "sup", "howdy",
+            # Hindi
+            "नमस्ते", "हेलो", "नमस्ते?", "हेलो?", "क्या हाल है", "कैसे हो", "धन्यवाद", "शुक्रिया", "ठीक है",
+            # French
+            "bonjour", "salut", "merci", "ça va", "merci beaucoup"
         }
         
-        if query_lower in conversational_keywords or query_lower.rstrip("!?. ") in conversational_keywords:
+        # Clean query for heuristic matching
+        clean_query = query_lower.rstrip("!?. ")
+        
+        if query_lower in conversational_keywords or clean_query in conversational_keywords or any(kw == clean_query for kw in conversational_keywords):
             return QueryClassification(
                 query_type="conversational",
                 translated_query=query,
                 confidence=1.0,
-                reasoning="Matched short conversational keyword heuristic.",
+                reasoning="Matched social heuristic (greeting/ack).",
                 subjects=["General"]
             )
             
@@ -74,7 +83,7 @@ class QueryClassifier:
             )
             
         # 3. Simple acknowledgments
-        if query_lower in ["ok", "okay", "alright", "sure", "fine", "k"]:
+        if query_lower in ["ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no"]:
             return QueryClassification(
                 query_type="conversational",
                 translated_query=query,

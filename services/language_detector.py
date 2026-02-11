@@ -37,7 +37,25 @@ class LanguageDetector:
         Detect the ISO language code for the given text.
         Returns 'en' as fallback.
         """
-        if not self._model or not text.strip():
+        if not text.strip():
+            return "en"
+            
+        # 1. Whitelist for common English greetings and short phrases
+        # FastText often misidentifies these short strings.
+        english_greetings = {
+            "hi", "hello", "hey", "greetings", "hi?", "hello?", "hey?",
+            "thanks", "thank you", "thx", "cool", "ok", "okay", "got it",
+            "bye", "goodbye", "see ya", "nice", "great", "awesome", "yep", "yes", "no",
+            "how are you", "how are you doing", "how are you today", "how are you doing today",
+            "what's up", "sup", "howdy", "k", "alright", "sure", "fine"
+        }
+        
+        clean_text = text.lower().strip().rstrip("!?. ")
+        if clean_text in english_greetings:
+            logger.info(f"Language detection: Whitelisted English text: {text}")
+            return "en"
+
+        if not self._model:
             return "en"
         
         try:

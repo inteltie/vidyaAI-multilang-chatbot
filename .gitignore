@@ -132,3 +132,4 @@ dmypy.json
 *.pkl
 *.pickle
 redis_data/
+*lid.176.bin

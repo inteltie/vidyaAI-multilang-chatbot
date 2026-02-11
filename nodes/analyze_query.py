@@ -7,6 +7,7 @@ from typing import Any, Dict
 from time import perf_counter
 
 from services.query_classifier import QueryClassifier, QueryClassification
+from services.language_detector import LanguageDetector
 from state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,9 @@ class AnalyzeQueryNode:
     into a single step/LLM call.
     """
 
-    def __init__(self, classifier: QueryClassifier, retriever: RetrieverService | None = None) -> None:
+    def __init__(self, classifier: QueryClassifier, detector: LanguageDetector, retriever: RetrieverService | None = None) -> None:
         self._classifier = classifier
+        self._detector = detector
         self._retriever = retriever
 
     async def __call__(self, state: AgentState) -> dict:
@@ -72,26 +74,33 @@ class AnalyzeQueryNode:
                 "give example", "examples", "example"
             }
             query_norm = final_query.lower().strip()
-            is_followup = query_norm in followup_phrases or len(query_norm.split()) <= 3
-            cached_resolved = None
-            if is_followup and user_session_id:
-                try:
-                    from services.cache_service import CacheService
-                    cached_resolved = await CacheService.get(f"resolved_query:{user_session_id}")
-                except Exception as e:
-                    logger.debug("Resolved query cache lookup failed: %s", e)
-
-            if cached_resolved and is_followup:
-                result = QueryClassification(
-                    query_type="curriculum_specific",
-                    translated_query=f"{cached_resolved}. Follow-up: {final_query}",
-                    confidence=0.8,
-                    reasoning="Used cached resolved query for short follow-up.",
-                    subjects=["General"]
-                )
+            
+            # Check social heuristics first to avoid misclassifying greetings as follow-ups
+            heuristic_result = self._classifier._check_heuristics(final_query)
+            
+            if heuristic_result:
+                result = heuristic_result
             else:
-                # Classification task with 15s timeout
-                result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
+                is_followup = query_norm in followup_phrases or len(query_norm.split()) <= 3
+                cached_resolved = None
+                if is_followup and user_session_id:
+                    try:
+                        from services.cache_service import CacheService
+                        cached_resolved = await CacheService.get(f"resolved_query:{user_session_id}")
+                    except Exception as e:
+                        logger.debug("Resolved query cache lookup failed: %s", e)
+
+                if cached_resolved and is_followup:
+                    result = QueryClassification(
+                        query_type="curriculum_specific",
+                        translated_query=f"{cached_resolved}. Follow-up: {final_query}",
+                        confidence=0.8,
+                        reasoning="Used cached resolved query for short follow-up.",
+                        subjects=["General"]
+                    )
+                else:
+                    # Classification task with 15s timeout
+                    result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
         except asyncio.TimeoutError:
             logger.warning("Query classification timed out after 15s")
             result = QueryClassification(
@@ -124,9 +133,13 @@ class AnalyzeQueryNode:
         })
         
         
-        # Language is ALWAYS from the request - no AI overrides
-        # detected_language is used internally to ensure agents work in English
-        updates["detected_language"] = state.get("language", "en")
+        # Language detection using FastText
+        detected_lang = self._detector.detect_language(query)
+        updates["detected_language"] = detected_lang
+        updates["language"] = detected_lang  # Update the target language for response translation
+        
+        # Override state language if needed, or just keep as-is
+        # Typically we want to know what language the current query is in regardless of request
         
         # Session metadata extraction
         if result.query_type != "conversational":

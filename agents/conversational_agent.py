@@ -53,21 +53,23 @@ class ConversationalAgent:
             except Exception as e:
                 logger.debug("Failed to calculate history tokens: %s", e)
 
-            # Check if this is truly the first interaction
             has_history = len(history) > 0
             
             target_lang = state.get("language", "en")
             prompt = (
                 f"You are Vidya, a friendly educational assistant. "
-                f"Respond in **{target_lang}**. "
-                f"{'Welcome back.' if is_restart else ''}\n\n"
-                f"Summary: {summary}\n"
-                f"History:\n{history_text}\n"
-                f"Message: {state['query']}\n\n"
+                f"Respond in **{target_lang}** using the following 'Acknowledge & Reconnect' pattern:\n\n"
+                f"1. Greet the user warmly (use their name if known from context).\n"
+                f"2. If there is an ongoing topic (summary/history), briefly mention it (e.g., 'We were just discussing {summary if summary else 'your studies'}').\n"
+                f"3. Ask if they want to continue with that topic or start something new.\n\n"
+                f"Context Summary: {summary}\n"
+                f"Recent History Snippet:\n{history_text}\n"
+                f"User Greeting: {state['query']}\n\n"
                 f"Rules:\n"
-                f"- Be warm. Use name if known.\n"
-                f"- {'NO Hello/Hi (mid-convo).' if has_history else 'Greet warmly.'}\n"
-                f"- Brief (<100 tokens).")
+                f"- Be warm and human-like. Use emojis (👋, 📚).\n"
+                f"- NEVER say generic 'I see you are greeting me'.\n"
+                f"- If there's NO context at all, just a very warm welcome/help offer.\n"
+                f"- Keep it brief and inviting (<60 tokens).")
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
             updates["response"] = resp.content.strip()
             
