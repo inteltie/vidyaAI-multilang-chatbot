@@ -36,6 +36,7 @@ from services import (
     Translator,
     CitationService,
     ResponseValidator,
+    LanguageDetector,
 )
 from state import AgentState
 from config import settings
@@ -51,6 +52,7 @@ class BackendApp:
         self._settings = settings
         self._redis_client: aioredis.Redis | None = None
         self._graph = None
+        self._language_detector = LanguageDetector()
         self._configure_logging()
         # Build app with lifespan
         self._app = self._build_app()
@@ -320,13 +322,13 @@ class BackendApp:
                     "user_id": request.user_id,
                     "user_session_id": request.user_session_id,
                     "user_type": request.user_type,
-                    "language": request.language,
+                    "language": self._language_detector.detect_language(request.query),
                     "agent_mode": request.agent_mode or "standard",
                     "student_grade": request.student_grade or "B",
                     "conversation_history": [],
                     "session_metadata": {},
                     "query_en": "",
-                    "detected_language": request.language,  # Initialize with request language
+                    "detected_language": "",  # To be filled by AnalyzeQueryNode if needed, or initialized here
                     "intent": QueryIntent.CONCEPT_EXPLANATION,
                     "is_context_reply": False,
                     "is_topic_shift": False,

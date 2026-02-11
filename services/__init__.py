@@ -7,6 +7,7 @@ from .retriever import RetrieverService
 from .translator import Translator
 from .response_validator import ResponseValidator, ValidationResult
 from .citation_service import CitationService
+from .language_detector import LanguageDetector
 
 __all__ = [
     "MemoryService",
@@ -18,5 +19,6 @@ __all__ = [
     "ResponseValidator",
     "ValidationResult",
     "CitationService",
+    "LanguageDetector",
 ]
 
