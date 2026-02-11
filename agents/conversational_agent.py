@@ -56,20 +56,37 @@ class ConversationalAgent:
             has_history = len(history) > 0
             
             target_lang = state.get("language", "en")
-            prompt = (
-                f"You are Vidya, a friendly educational assistant. "
-                f"Respond in **{target_lang}** using the following 'Acknowledge & Reconnect' pattern:\n\n"
-                f"1. Greet the user warmly (use their name if known from context).\n"
-                f"2. If there is an ongoing topic (summary/history), briefly mention it (e.g., 'We were just discussing {summary if summary else 'your studies'}').\n"
-                f"3. Ask if they want to continue with that topic or start something new.\n\n"
-                f"Context Summary: {summary}\n"
-                f"Recent History Snippet:\n{history_text}\n"
-                f"User Greeting: {state['query']}\n\n"
-                f"Rules:\n"
-                f"- Be warm and human-like. Use emojis (👋, 📚).\n"
-                f"- NEVER say generic 'I see you are greeting me'.\n"
-                f"- If there's NO context at all, just a very warm welcome/help offer.\n"
-                f"- Keep it brief and inviting (<60 tokens).")
+            
+            # Different prompts for fresh vs mid-conversation greetings
+            if not has_history:
+                # Fresh conversation - simple welcome
+                prompt = (
+                    f"You are Vidya, a friendly educational assistant. "\
+                    f"The user just greeted you for the first time. "\
+                    f"Respond in **{target_lang}** with a warm, brief welcome.\n\n"\
+                    f"User Greeting: {state['query']}\n\n"\
+                    f"Rules:\n"\
+                    f"- Be warm and welcoming. Use emojis (👋, 📚).\n"\
+                    f"- Introduce yourself briefly as Vidya, their learning companion.\n"\
+                    f"- Ask how you can help them today.\n"\
+                    f"- Keep it brief and inviting (<60 tokens).\n"\
+                    f"- DO NOT mention any previous topics or discussions.")
+            else:
+                # Mid-conversation greeting - reconnect pattern
+                prompt = (
+                    f"You are Vidya, a friendly educational assistant. "\
+                    f"The user is greeting you mid-conversation. "\
+                    f"Respond in **{target_lang}** using the 'Acknowledge & Reconnect' pattern:\n\n"\
+                    f"1. Greet the user warmly.\n"\
+                    f"2. Briefly mention the ongoing topic from the context (e.g., 'We were just discussing {summary if summary else 'your studies'}').\n"\
+                    f"3. Ask if they want to continue with that topic or start something new.\n\n"\
+                    f"Context Summary: {summary}\n"\
+                    f"Recent History Snippet:\n{history_text}\n"\
+                    f"User Greeting: {state['query']}\n\n"\
+                    f"Rules:\n"\
+                    f"- Be warm and human-like. Use emojis (👋, 📚).\n"\
+                    f"- NEVER say generic 'I see you are greeting me'.\n"\
+                    f"- Keep it brief and inviting (<60 tokens).")
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
             updates["response"] = resp.content.strip()
             
