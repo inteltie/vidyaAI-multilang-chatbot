@@ -40,19 +40,12 @@ class LanguageDetector:
         if not text.strip():
             return "en"
             
-        # 1. Whitelist for common English greetings and short phrases
-        # FastText often misidentifies these short strings.
-        english_greetings = {
-            "hi", "hello", "hey", "greetings", "hi?", "hello?", "hey?",
-            "thanks", "thank you", "thx", "cool", "ok", "okay", "got it",
-            "bye", "goodbye", "see ya", "nice", "great", "awesome", "yep", "yes", "no",
-            "how are you", "how are you doing", "how are you today", "how are you doing today",
-            "what's up", "sup", "howdy", "k", "alright", "sure", "fine"
-        }
+        # 1. Whitelist for common greetings using shared utility
+        # FastText often misidentifies short strings like "hii" as foreign.
+        from services.utils import is_greeting
         
-        clean_text = text.lower().strip().rstrip("!?. ")
-        if clean_text in english_greetings:
-            logger.info(f"Language detection: Whitelisted English text: {text}")
+        if is_greeting(text):
+            logger.info(f"Language detection: Whitelisted greeting text: {text}")
             return "en"
 
         if not self._model:
