@@ -8,6 +8,35 @@ from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
+# ISO 639-1 code → human-readable name used in LLM prompts.
+# Keeping prompt language explicit produces much better translation quality.
+_LANG_NAMES: dict[str, str] = {
+    "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "kn": "Kannada",
+    "gu": "Gujarati",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "ja": "Japanese",
+    "zh": "Chinese (Simplified)",
+    "ko": "Korean",
+    "ar": "Arabic",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "ru": "Russian",
+}
+
+
+def _lang_name(code: str) -> str:
+    """Return the human-readable language name for an ISO 639-1 code."""
+    return _LANG_NAMES.get(code.lower(), code.upper())
+
 
 class Translator:
     """Bidirectional translator using the LLM."""
@@ -19,8 +48,9 @@ class Translator:
         """Translate the given text to English, returning original on failure."""
         if source_lang == "en":
             return text, 0, 0
+        lang_label = _lang_name(source_lang)
         prompt = (
-            f"Translate the following {source_lang} educational text into clear English. "
+            f"Translate the following {lang_label} educational text into clear English. "
             "Respond with only the translated text.\n\n"
             f"Text: {text}"
         )
@@ -49,10 +79,11 @@ class Translator:
         """Translate an English text to the target language, returning original on failure."""
         if target_lang == "en":
             return text, 0, 0
+        lang_label = _lang_name(target_lang)
         prompt = (
-            f"You are a professional translator. Task: Ensure the following text is in **{target_lang}**. \n\n"
-            f"1. If the text is NOT in {target_lang}, translate it ENTIRELY into {target_lang}.\n"
-            f"2. If the text is ALREADY in {target_lang}, return it exactly as it is.\n\n"
+            f"You are a professional translator. Task: Ensure the following text is in **{lang_label}**. \n\n"
+            f"1. If the text is NOT in {lang_label}, translate it ENTIRELY into {lang_label}.\n"
+            f"2. If the text is ALREADY in {lang_label}, return it exactly as it is.\n\n"
             "Preserve technical terms and academic structure. Respond ONLY with the final text.\n\n"
             f"Text: {text}"
         )

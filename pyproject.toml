@@ -20,4 +20,5 @@ dependencies = [
     "tiktoken",
     "fasttext-wheel>=0.9.2",
     "numpy<2.0",
+    "httpx>=0.28.1",
 ]

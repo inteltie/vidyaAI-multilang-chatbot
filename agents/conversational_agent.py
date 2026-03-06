@@ -76,15 +76,17 @@ class ConversationalAgent:
                 prompt = (
                     f"You are Vidya, a friendly educational assistant. "\
                     f"The user is greeting you mid-conversation. "\
-                    f"Respond in **{target_lang}** using the 'Acknowledge & Reconnect' pattern:\n\n"\
+                    f"Respond in **{target_lang}** using a natural reconnect pattern:\n\n"\
                     f"1. Greet the user warmly.\n"\
-                    f"2. Briefly mention the ongoing topic from the context (e.g., 'We were just discussing {summary if summary else 'your studies'}').\n"\
-                    f"3. Ask if they want to continue with that topic or start something new.\n\n"\
+                    f"2. Optionally, acknowledge they are returning to the conversation, OR briefly mention the ongoing topic if relevant ('We were looking at {summary if summary else 'your studies'}').\n"\
+                    f"3. Ask how you can help them right now, or if they want to continue.\n\n"\
                     f"Context Summary: {summary}\n"\
                     f"Recent History Snippet:\n{history_text}\n"\
                     f"User Greeting: {state['query']}\n\n"\
                     f"Rules:\n"\
-                    f"- Be warm and human-like. Use emojis (👋, 📚).\n"\
+                    f"- IMPORTANT: Vary your phrasing! DO NOT always say 'We were just discussing...'. "\
+                    f"Be natural. (e.g., 'Welcome back!', 'Hi again! Still working on {summary[:20] if summary else 'your topics'}?').\n"\
+                    f"- Use emojis (👋, 📚).\n"\
                     f"- NEVER say generic 'I see you are greeting me'.\n"\
                     f"- Keep it brief and inviting (<60 tokens).")
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})

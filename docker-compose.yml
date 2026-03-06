@@ -42,8 +42,6 @@ services:
       - backend
     volumes:
       - mongo_data:/data/db
-    logging:
-      driver: "none"
     healthcheck:
       test: [ "CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })", "--quiet" ]
       interval: 100s
@@ -59,8 +57,6 @@ services:
       - backend
     volumes:
       - redis_data:/data
-    logging:
-      driver: "none"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 100s

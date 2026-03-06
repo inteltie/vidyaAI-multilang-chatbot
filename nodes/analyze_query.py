@@ -77,9 +77,11 @@ class AnalyzeQueryNode:
             
             # Check social heuristics first to avoid misclassifying greetings as follow-ups
             heuristic_result = self._classifier._check_heuristics(final_query)
+            logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
             
             if heuristic_result:
                 result = heuristic_result
+                logger.info(f"DEBUG: analyze_query set result to heuristic: {result.query_type}")
             else:
                 is_followup = query_norm in followup_phrases or len(query_norm.split()) <= 3
                 cached_resolved = None

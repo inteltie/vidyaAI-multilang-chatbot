@@ -42,13 +42,44 @@ class QueryClassifier:
         self._classifier = llm.with_structured_output(QueryClassification, include_raw=True)
         self._cache = {} # Simple cache for query analysis results
     
+    # Educational subject keywords for fast-path heuristic
+    _SUBJECT_KEYWORDS = {
+        # Sciences
+        "physics", "chemistry", "biology", "science", "botany", "zoology",
+        "anatomy", "ecology", "genetics", "microbiology", "biochemistry",
+        # Maths
+        "mathematics", "maths", "math", "algebra", "geometry", "calculus",
+        "trigonometry", "statistics", "probability", "arithmetic",
+        # Social
+        "history", "geography", "civics", "economics", "economy", "political",
+        "sociology", "psychology", "philosophy", "anthropology",
+        # Language / Lit
+        "english", "hindi", "literature", "grammar", "essay", "poem", "poetry",
+        "marathi", "sanskrit", "urdu",
+        # CS / Tech
+        "computer", "programming", "coding", "algorithm", "software",
+        "hardware", "networking", "database", " python", "java",
+        # Chemistry / Advanced Math
+        "chemical kinetics", "chemical equations", "trigonometry", "stoichiometry",
+        "calculus", "thermodynamics", "organic chemistry",
+        # Generic educational
+        "photosynthesis", "evolution", "atom", "molecule", "force", "gravity",
+        "energy", "motion", "electricity", "magnetism", "thermodynamics",
+        "chapter", "lesson", "topic", "concept", "theory", "theorem",
+        "formula", "equation", "definition",
+        # Japanese Subjects / Keywords
+        "物理", "化学", "生物", "科学", "数学", "代数", "幾何", "歴史", 
+        "地理", "経済", "文学", "英語", "日本語", "プログラミング", "光合成",
+        "重力", "エネルギー",
+    }
+
     def _check_heuristics(self, query: str) -> QueryClassification | None:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
-        
-        # 1. Conversational keywords using shared utility
+        words = query_lower.split()
+
+        # 1. Greeting / social check
         from services.utils import is_greeting
-        
         if is_greeting(query):
             return QueryClassification(
                 query_type="conversational",
@@ -57,20 +88,40 @@ class QueryClassifier:
                 reasoning="Matched social heuristic (greeting/ack).",
                 subjects=["General"]
             )
-            
-        # 2. Check for vague help requests or meta-queries
-        help_patterns = ["i need help", "can you help", "i need some help", "what can you do", "help me"]
-        if any(pattern in query_lower for pattern in help_patterns) and len(query_lower.split()) < 10:
+
+        # 2. Subject-keyword fast path — catches 'i need ... for/about <subject>'
+        #    and any query that contains an explicit educational subject noun.
+        subject_hits = [k for k in self._SUBJECT_KEYWORDS if k in query_lower]
+        if subject_hits:
+            detected_subject = subject_hits[0].capitalize()
             return QueryClassification(
-                query_type="conversational",
+                query_type="curriculum_specific",
                 translated_query=query,
-                confidence=0.9,
-                reasoning="Matched meta-help request heuristic.",
-                subjects=["General"]
+                confidence=0.95,
+                reasoning=f"Fast-path: detected subject keyword '{detected_subject}'.",
+                subjects=[detected_subject]
             )
-            
-        # 3. Simple acknowledgments
-        if query_lower in ["ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no"]:
+
+        # 3. Vague help requests — only fire when there is NO educational subject
+        #    attached. Use exact-end check to avoid swallowing 'i need help with X'.
+        help_patterns = [
+            "i need help", "can you help me", "i need some help",
+            "what can you do", "help me",
+        ]
+        # Only classify as conversational if the query ends with the help phrase
+        # or the full query IS the help phrase (avoid false positives on 'i need help with economics').
+        for pattern in help_patterns:
+            if query_lower == pattern or query_lower.endswith(pattern):
+                return QueryClassification(
+                    query_type="conversational",
+                    translated_query=query,
+                    confidence=0.9,
+                    reasoning="Matched meta-help request heuristic.",
+                    subjects=["General"]
+                )
+
+        # 4. Simple acknowledgments
+        if query_lower in {"ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no"}:
             return QueryClassification(
                 query_type="conversational",
                 translated_query=query,
@@ -78,7 +129,7 @@ class QueryClassifier:
                 reasoning="Matched acknowledgment heuristic.",
                 subjects=["General"]
             )
-            
+
         return None
         
     def _format_history(self, history: List[Union[ConversationTurn, BaseMessage]], limit: int = 4) -> str:
@@ -140,7 +191,9 @@ class QueryClassifier:
 Tasks:
 1. **Standalone Query**: Reconstruct pronouns/follow-ups into complete English query (e.g., "Why?" -> "Why does photosynthesis happen?"). 
 2. Translate to English (if needed).
-3. Classify: "conversational" (greetings, meta-chat, help) or "curriculum_specific" (educational topics).
+3. Classify: "conversational" or "curriculum_specific":
+   - conversational: greetings, meta-chat, vague help requests (e.g., "i need some help", "hi").
+   - curriculum_specific: explicit educational topics OR asking for help ON an abstract academic subject (e.g., "help me with chemical kinetics", "explain gravity").
 4. For "curriculum_specific", scan for: class_level, subjects, chapter, lecture_id.
 
 History:
