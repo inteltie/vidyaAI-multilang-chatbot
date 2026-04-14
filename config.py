@@ -86,7 +86,7 @@ class Settings(BaseModel):
             "pinecone_index": os.getenv("PINECONE_INDEX") or os.getenv("PINECONE_INDEX_NAME"),
             "pinecone_env": os.getenv("PINECONE_ENV", ""),
             "mongo_uri": os.getenv("MONGO_URI") or os.getenv("MONGODB_URI"),
-            "mongo_db_name": os.getenv("MONGO_DB_NAME") or os.getenv("DB_NAME"),
+            "mongo_db_name": os.getenv("MONGO_DB") or os.getenv("MONGO_DB_NAME") or os.getenv("DB_NAME"),
             
             "model_name": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL") or "gpt-4o-mini",
             "web_search_model_name": os.getenv("WEB_SEARCH_MODEL_NAME") or "gpt-4o-mini",

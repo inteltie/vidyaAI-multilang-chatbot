@@ -5,16 +5,12 @@ services:
       dockerfile: Dockerfile
     container_name: fastapi-app
     depends_on:
-      mongo:
-        condition: service_healthy
+
       redis:
         condition: service_healthy
     env_file:
       - .env # This reads all variables from .env file
     environment:
-      # Override MongoDB URL for Docker network (keeps .env clean for local dev)
-      - MONGODB_URI=mongodb://mongo:27017/VidyaAI-Chat
-      - MONGO_URI=mongodb://mongo:27017/VidyaAI-Chat
       - REDIS_URL=redis://redis:6379/0
     ports:
       - "8001:8001"
@@ -34,20 +30,7 @@ services:
       retries: 5
       start_period: 20s
 
-  mongo:
-    image: mongo:7.0
-    container_name: mongo
-    restart: always
-    networks:
-      - backend
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: [ "CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })", "--quiet" ]
-      interval: 100s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+
 
   redis:
     image: redis:7-alpine
@@ -69,5 +52,5 @@ networks:
 
 
 volumes:
-  mongo_data:
+
   redis_data:
