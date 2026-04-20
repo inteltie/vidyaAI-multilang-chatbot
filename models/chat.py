@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from beanie import Document
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pymongo import IndexModel, ASCENDING
 
 # Indian Standard Time (UTC+5:30)
@@ -24,11 +24,53 @@ class KeyEntities(BaseModel):
     identified_gaps: Optional[str] = None
     others: Optional[Dict[str, Any]] = None
 
+    @field_validator("name", "topic", "identified_gaps", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> Optional[str]:
+        """Handle legacy list-shaped values stored in MongoDB."""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            return "; ".join(cleaned) if cleaned else None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return str(value)
+
+    @field_validator("others", mode="before")
+    @classmethod
+    def _coerce_others(cls, value: Any) -> Optional[Dict[str, Any]]:
+        """Normalize legacy non-dict variants for `others`."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            if not value:
+                return None
+            return {"items": value}
+        return {"value": value}
+
 class StructuredSummary(BaseModel):
     """Structured compaction of a conversation turn."""
     summary: str = Field(..., description="A 3-5 sentence overview of the conversation.")
     key_entities: Optional[KeyEntities] = Field(None, description="Key entities like student name, topic, and learning gaps.")
     user_preferences: Optional[str] = Field(None, description="User mentioned preferences or constraints.")
+
+    @field_validator("user_preferences", mode="before")
+    @classmethod
+    def _coerce_user_preferences(cls, value: Any) -> Optional[str]:
+        """Handle legacy list payloads for user preferences."""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            return "; ".join(cleaned) if cleaned else None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return str(value)
 
 class ChatSession(Document):
     """Document model for a chat session."""
