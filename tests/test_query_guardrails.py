@@ -48,6 +48,39 @@ class _FakeWebSearchTool:
 
 
 class QueryGuardrailsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_analyze_query_greeting_bypasses_unclear_clarification(self):
+        from services.query_classifier import QueryQualityAssessment, QueryClassification
+
+        class _GreetingClassifier(_FakeClassifier):
+            def _check_heuristics(self, _query: str):
+                return QueryClassification(
+                    query_type="conversational",
+                    translated_query="hi",
+                    confidence=1.0,
+                    reasoning="Matched social heuristic (greeting/ack).",
+                    subjects=["General"],
+                )
+
+        quality = QueryQualityAssessment(
+            is_unclear=True,
+            reason="noisy_or_gibberish_query",
+            normalized_query="hi",
+            clarification_prompt="Please clarify",
+        )
+        node = AnalyzeQueryNode(_GreetingClassifier(quality), _FakeDetector())
+        updates = await node(
+            {
+                "query": "hi",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+            }
+        )
+
+        self.assertEqual(updates["query_type"], "conversational")
+        self.assertEqual(updates["query_en"], "hi")
+        self.assertNotIn("response", updates)
+        self.assertIsNone(updates["clarification_message"])
+
     async def test_analyze_query_asks_single_clarification_for_unclear_input(self):
         from services.query_classifier import QueryQualityAssessment
 

@@ -72,7 +72,14 @@ class AnalyzeQueryNode:
             updates["query_en"] = quality.normalized_query or final_query
             updates["clarification_message"] = None
 
-            if quality.is_unclear and clarification_attempts < 1:
+            # Run social heuristics before unclear-query guardrails so greetings
+            # (e.g., "hi") are not incorrectly routed to clarification.
+            heuristic_result = self._classifier._check_heuristics(
+                quality.normalized_query or final_query
+            )
+            logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
+
+            if quality.is_unclear and clarification_attempts < 1 and not heuristic_result:
                 clarification_text = quality.clarification_prompt or (
                     "Could you clarify what you mean so I can help you better?"
                 )
@@ -99,10 +106,6 @@ class AnalyzeQueryNode:
             }
             effective_query = quality.normalized_query or final_query
             query_norm = effective_query.lower().strip()
-            
-            # Check social heuristics first to avoid misclassifying greetings as follow-ups
-            heuristic_result = self._classifier._check_heuristics(effective_query)
-            logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
             
             if heuristic_result:
                 result = heuristic_result
