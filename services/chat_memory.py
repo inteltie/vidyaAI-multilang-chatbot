@@ -248,6 +248,12 @@ class MemoryService:
                 
                 # Use structured summary if available, fallback to simple summary
                 current_summary = session.structured_summary or {"summary": session.summary or ""}
+                if hasattr(current_summary, "model_dump"):
+                    current_summary_payload = current_summary.model_dump()
+                elif isinstance(current_summary, dict):
+                    current_summary_payload = current_summary
+                else:
+                    current_summary_payload = {"summary": str(current_summary)}
                 
                 prompt = (
                     "You are a memory compaction system. Your goal is to maintain a structured summary of the conversation.\n"
@@ -255,7 +261,7 @@ class MemoryService:
                     "1. summary: A 3-5 sentence overview of the conversation.\n"
                     "2. key_entities: {name, topic, identified_gaps, others}: Extract the student's name, the main subjects discussed, and specific learning gaps identified.\n"
                     "3. user_preferences: Any explicit preferences or constraints the user mentioned.\n\n"
-                    f"Previous Data: {json.dumps(current_summary)}\n\n"
+                    f"Previous Data: {json.dumps(current_summary_payload)}\n\n"
                     f"New Messages:\n{messages_text}\n\n"
                     "Output ONLY valid JSON."
                 )

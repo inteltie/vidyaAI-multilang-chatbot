@@ -97,6 +97,7 @@ class AgentState(TypedDict, total=False):
     subjects: Annotated[List[str], merge_list]
     prefilled_observations: List[Dict[str, Any]]
     rag_quality: Optional[Literal["low", "medium", "high"]]
+    web_fallback_reason: Optional[str]
     validation_results: Optional[Dict[str, Any]]
     is_correction: bool
     clarification_message: Optional[str]

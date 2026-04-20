@@ -1,6 +1,7 @@
 """Conversational agent for handling acknowledgments and social interactions."""
 
 import logging
+from collections.abc import Mapping
 from langchain_openai import ChatOpenAI
 from state import AgentState
 from config import settings
@@ -17,6 +18,15 @@ class ConversationalAgent:
     async def __call__(self, state: AgentState) -> dict:
         """Generate friendly conversational response."""
         query = state["query"].lower()
+
+        # Deterministic clarification path from AnalyzeQueryNode
+        if state.get("needs_context") and state.get("clarification_message"):
+            return {
+                "response": state["clarification_message"],
+                "llm_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
         
         # Detection of Session Restart
         is_restart = state.get("is_session_restart", False)
@@ -42,6 +52,24 @@ class ConversationalAgent:
             session_metadata = state.get("session_metadata", {})
             summary = session_metadata.get("summary", "")
             structured_summary = session_metadata.get("structured_summary")
+            structured_summary_data = {}
+            if structured_summary:
+                if isinstance(structured_summary, Mapping):
+                    structured_summary_data = dict(structured_summary)
+                elif hasattr(structured_summary, "model_dump"):
+                    structured_summary_data = structured_summary.model_dump()
+                else:
+                    structured_summary_data = {
+                        "key_entities": getattr(structured_summary, "key_entities", {}),
+                    }
+
+            key_entities = structured_summary_data.get("key_entities") or {}
+            if hasattr(key_entities, "model_dump"):
+                key_entities = key_entities.model_dump()
+            elif not isinstance(key_entities, Mapping):
+                key_entities = {}
+
+            topic = key_entities.get("topic", "your studies")
             
             # Aggressive Truncation: Keep only last 4 messages for conversational context
             recent_history = history[-4:]
@@ -77,11 +105,11 @@ class ConversationalAgent:
             else:
                 # Format memory context from structured summary
                 memory_context = ""
-                if structured_summary:
+                if structured_summary_data:
                     memory_context = (
-                        f"Student Name: {structured_summary.get('key_entities', {}).get('name', 'User')}\n"
-                        f"Current Topic: {structured_summary.get('key_entities', {}).get('topic', 'Not set')}\n"
-                        f"Identified Gaps: {structured_summary.get('key_entities', {}).get('identified_gaps', 'None')}\n"
+                        f"Student Name: {key_entities.get('name', 'User')}\n"
+                        f"Current Topic: {key_entities.get('topic', 'Not set')}\n"
+                        f"Identified Gaps: {key_entities.get('identified_gaps', 'None')}\n"
                     )
                 elif summary:
                     memory_context = f"Overview: {summary}\n"
@@ -99,7 +127,7 @@ class ConversationalAgent:
                     f"User Greeting: {state['query']}\n\n"
                     f"Rules:\n"
                     f"- IMPORTANT: Vary your phrasing! DO NOT always say 'We were just discussing...'. "
-                    f"Be natural. (e.g., 'Welcome back!', 'Hi again! Still working on {structured_summary.get('key_entities', {}).get('topic', 'your studies') if structured_summary else 'your topics'}?').\n"
+                    f"Be natural. (e.g., 'Welcome back!', 'Hi again! Still working on {topic if structured_summary_data else 'your topics'}?').\n"
                     f"- Use emojis (👋, 📚).\n"
                     f"- NEVER say generic 'I see you are greeting me'.\n"
                     f"- Keep it brief and inviting (<60 tokens).")

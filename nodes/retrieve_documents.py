@@ -26,6 +26,7 @@ class RetrieveDocumentsNode:
         query_raw = state.get("query", "")
         # Use explicit request filters provided in the request body
         request_filters = state.get("request_filters", {})
+        fallback_reason = None
         
         if not query_en:
             logger.warning("Missing query_en for document retrieval. Skipping.")
@@ -33,6 +34,7 @@ class RetrieveDocumentsNode:
                 "documents": [],
                 "prefilled_observations": [],
                 "rag_quality": "low",
+                "web_fallback_reason": "missing_query_en",
                 "citations": [],
                 "llm_calls": 0,
                 "timings": {"retrieve_documents": perf_counter() - start}
@@ -138,6 +140,8 @@ class RetrieveDocumentsNode:
 
         # Handle Web Search results (either from parallel task or needed due to low quality)
         llm_calls_in_node = 0
+        input_tokens = 0
+        output_tokens = 0
         
         if web_results:
             # Web search was done in parallel
@@ -155,14 +159,16 @@ class RetrieveDocumentsNode:
                 "args": {"query": query_en},
                 "observation": obs_text
             })
+            fallback_reason = "recency"
             llm_calls_in_node += 1
-            logger.info("Proactive web search results added.")
+            logger.info("Proactive web search results added. reason=%s", fallback_reason)
         elif state.get("rag_quality") == "low":
             # RAG failed, and we didn't start web search in parallel. 
             # Check if we have enough time left (Stability Phase 2: Skip web search on slow paths)
             current_elapsed = perf_counter() - start
             if current_elapsed > 10.0: # If RAG already took > 10s, skip web search
                 logger.warning("RAG quality low but RAG was slow (%.2fs). Skipping reactive web search to save time.", current_elapsed)
+                fallback_reason = "timeout_skip"
             else:
                 logger.info("RAG quality low. Triggering reactive web search...")
                 from tools.web_search_tool import WebSearchTool
@@ -184,10 +190,19 @@ class RetrieveDocumentsNode:
                         "args": {"query": query_en},
                         "observation": obs_text
                     })
+                    fallback_reason = "low_rag"
                     llm_calls_in_node += 1
-                    logger.info("Reactive web search completed.")
+                    logger.info("Reactive web search completed. reason=%s", fallback_reason)
                 except asyncio.TimeoutError:
                     logger.warning("Reactive web search timed out after 10s")
+                    fallback_reason = "web_timeout"
+        elif needs_web_proactive:
+            # Proactive web path was relevant, but we may have skipped running it due to
+            # speculative RAG reuse. Distinguish skip vs attempted-without-results.
+            if can_use_speculative and web_results is None:
+                fallback_reason = "recency_skipped_speculative"
+            else:
+                fallback_reason = "recency_no_result"
 
         # Build lightweight citations
         citations = []
@@ -211,10 +226,11 @@ class RetrieveDocumentsNode:
             "documents": state["documents"],
             "prefilled_observations": state["prefilled_observations"],
             "rag_quality": state["rag_quality"],
+            "web_fallback_reason": fallback_reason,
             "citations": state["citations"],
             "llm_calls": llm_calls_in_node,
-            "input_tokens": input_tokens if "input_tokens" in locals() else 0,
-            "output_tokens": output_tokens if "output_tokens" in locals() else 0,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "timings": {"retrieve_documents": duration}
         }
 

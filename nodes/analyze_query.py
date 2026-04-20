@@ -36,6 +36,7 @@ class AnalyzeQueryNode:
         query = state["query"]
         history = state.get("conversation_history", [])
         user_session_id = state.get("user_session_id")
+        clarification_attempts = int(state.get("context_gathering_attempts", 0) or 0)
         
         # Phase 5: Query Summarization for large inputs
         final_query = query
@@ -67,16 +68,40 @@ class AnalyzeQueryNode:
         # Phase 6: Sequential Analysis (Speculative RAG disabled for stability)
         import asyncio
         try:
+            quality = self._classifier.assess_query_quality(final_query)
+            updates["query_en"] = quality.normalized_query or final_query
+            updates["clarification_message"] = None
+
+            if quality.is_unclear and clarification_attempts < 1:
+                clarification_text = quality.clarification_prompt or (
+                    "Could you clarify what you mean so I can help you better?"
+                )
+                updates.update({
+                    "query_type": "conversational",
+                    "response": clarification_text,
+                    "needs_context": True,
+                    "clarification_message": clarification_text,
+                    "context_gathering_attempts": clarification_attempts + 1,
+                    "subjects": [],
+                    "llm_calls": 0,
+                    "detected_language": self._detector.detect_language(query),
+                    "language": self._detector.detect_language(query),
+                    "timings": {"analyze_query": perf_counter() - start},
+                })
+                logger.info("Unclear query detected (%s). Asking one clarification.", quality.reason)
+                return updates
+
             # Heuristic: cheap follow-up resolution using cached context to avoid extra tokens
             followup_phrases = {
                 "why", "how", "what", "explain", "explain more", "more",
                 "elaborate", "tell me more", "again", "details", "detail",
                 "give example", "examples", "example"
             }
-            query_norm = final_query.lower().strip()
+            effective_query = quality.normalized_query or final_query
+            query_norm = effective_query.lower().strip()
             
             # Check social heuristics first to avoid misclassifying greetings as follow-ups
-            heuristic_result = self._classifier._check_heuristics(final_query)
+            heuristic_result = self._classifier._check_heuristics(effective_query)
             logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
             
             if heuristic_result:
@@ -95,19 +120,19 @@ class AnalyzeQueryNode:
                 if cached_resolved and is_followup:
                     result = QueryClassification(
                         query_type="curriculum_specific",
-                        translated_query=f"{cached_resolved}. Follow-up: {final_query}",
+                        translated_query=f"{cached_resolved}. Follow-up: {effective_query}",
                         confidence=0.8,
                         reasoning="Used cached resolved query for short follow-up.",
                         subjects=["General"]
                     )
                 else:
                     # Classification task with 15s timeout
-                    result = await asyncio.wait_for(self._classifier.analyze(final_query, history), timeout=15.0)
+                    result = await asyncio.wait_for(self._classifier.analyze(effective_query, history), timeout=15.0)
         except asyncio.TimeoutError:
             logger.warning("Query classification timed out after 15s")
             result = QueryClassification(
                 query_type="curriculum_specific",
-                translated_query=final_query,
+                translated_query=updates.get("query_en", final_query),
                 confidence=0.0,
                 reasoning="Fallback due to timeout",
                 subjects=["General"]
@@ -116,7 +141,7 @@ class AnalyzeQueryNode:
             logger.error("Query classification failed: %s", e)
             result = QueryClassification(
                 query_type="curriculum_specific",
-                translated_query=final_query,
+                translated_query=updates.get("query_en", final_query),
                 confidence=0.0,
                 reasoning=f"Fallback due to error: {e}"
             )

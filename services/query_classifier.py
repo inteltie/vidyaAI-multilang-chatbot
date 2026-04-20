@@ -1,6 +1,7 @@
 """Query classifier for routing to appropriate agent."""
 
 import logging
+import re
 from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,15 @@ class QueryClassification(BaseModel):
     lecture_id: Optional[str] = Field(None, description="Specific lecture/session ID if mentioned")
     input_tokens: int = Field(default=0)
     output_tokens: int = Field(default=0)
+
+
+class QueryQualityAssessment(BaseModel):
+    """Heuristic assessment for query clarity before full classification."""
+
+    is_unclear: bool = False
+    reason: Optional[str] = None
+    normalized_query: str
+    clarification_prompt: Optional[str] = None
 
 
 class QueryClassifier:
@@ -72,6 +82,43 @@ class QueryClassifier:
         "地理", "経済", "文学", "英語", "日本語", "プログラミング", "光合成",
         "重力", "エネルギー",
     }
+    _ABBREVIATION_MAP = {
+        "phy": "physics",
+        "chem": "chemistry",
+        "bio": "biology",
+        "sci": "science",
+        "sst": "social science",
+        "math": "mathematics",
+        "hw": "homework",
+        "ques": "question",
+        "pls": "please",
+        "plz": "please",
+    }
+    _CONTEXTUAL_ABBREVIATION_MAP = {
+        # Expand only when nearby educational context strongly suggests subject intent.
+        "eng": "english",
+    }
+    _EDUCATIONAL_INTENT_TOKENS = {
+        "homework",
+        "school",
+        "class",
+        "assignment",
+        "subject",
+        "chapter",
+        "lesson",
+        "topic",
+        "exam",
+        "test",
+        "syllabus",
+        "teacher",
+        "student",
+        "study",
+        "revision",
+        "curriculum",
+    }
+    _MIN_CLEAR_ALPHA_CHARS = 3
+    _MIN_CLEAR_ALPHA_RATIO = 0.35
+    _MAX_REPEAT_CHAR_RUN = 4
 
     def _check_heuristics(self, query: str) -> QueryClassification | None:
         """Check if query can be classified by simple heuristics."""
@@ -136,6 +183,104 @@ class QueryClassifier:
         """Format history into role: content text, handling both dicts and objects."""
         from services.utils import format_history
         return format_history(history, limit)
+
+    def _normalize_subject_keywords(self) -> List[List[str]]:
+        """Normalize configured subject keywords into token sequences."""
+        normalized = []
+        for keyword in self._SUBJECT_KEYWORDS:
+            kw_tokens = re.findall(r"[a-zA-Z]+", keyword.lower().strip())
+            if kw_tokens:
+                normalized.append(kw_tokens)
+        return normalized
+
+    def _contains_subject_keyword(self, text: str) -> bool:
+        """Check subject presence via exact token matching (no substring matches)."""
+        query_tokens = re.findall(r"[a-zA-Z]+", (text or "").lower())
+        if not query_tokens:
+            return False
+
+        token_set = set(query_tokens)
+        for kw_tokens in self._normalize_subject_keywords():
+            if len(kw_tokens) == 1:
+                if kw_tokens[0] in token_set:
+                    return True
+                continue
+
+            # Multi-word keyword: require exact contiguous token sequence.
+            window = len(kw_tokens)
+            for idx in range(len(query_tokens) - window + 1):
+                if query_tokens[idx : idx + window] == kw_tokens:
+                    return True
+        return False
+
+    def assess_query_quality(self, query: str) -> QueryQualityAssessment:
+        """Detect unclear/gibberish input and normalize common abbreviations."""
+        query_norm = (query or "").strip()
+        query_lower = query_norm.lower()
+        if not query_norm:
+            return QueryQualityAssessment(
+                is_unclear=True,
+                reason="empty_query",
+                normalized_query=query_norm,
+                clarification_prompt="Could you please share your question in a bit more detail?",
+            )
+
+        tokens = re.findall(r"[a-zA-Z]+", query_lower)
+        educational_intent = (
+            any(tok in self._EDUCATIONAL_INTENT_TOKENS for tok in tokens)
+            or self._contains_subject_keyword(query_lower)
+        )
+        expanded_tokens = []
+        for tok in tokens:
+            if tok in self._ABBREVIATION_MAP:
+                expanded_tokens.append(self._ABBREVIATION_MAP[tok])
+            elif educational_intent and tok in self._CONTEXTUAL_ABBREVIATION_MAP:
+                expanded_tokens.append(self._CONTEXTUAL_ABBREVIATION_MAP[tok])
+            else:
+                expanded_tokens.append(tok)
+        normalized_query = query_norm
+        if tokens and expanded_tokens != tokens:
+            normalized_query = query_norm
+            for old, new in zip(tokens, expanded_tokens):
+                if old != new:
+                    normalized_query = re.sub(
+                        rf"\b{re.escape(old)}\b",
+                        new,
+                        normalized_query,
+                        flags=re.IGNORECASE,
+                    )
+            normalized_query = normalized_query.strip()
+
+        alpha_chars = sum(ch.isalpha() for ch in query_norm)
+        alpha_ratio = alpha_chars / max(1, len(query_norm))
+        long_repeat = re.search(r"(.)\1{" + str(self._MAX_REPEAT_CHAR_RUN) + ",}", query_lower)
+        symbol_only = bool(re.fullmatch(r"[\W_]+", query_norm))
+        gibberish_short = len(tokens) <= 2 and alpha_chars < self._MIN_CLEAR_ALPHA_CHARS
+
+        if symbol_only or long_repeat or gibberish_short or alpha_ratio < self._MIN_CLEAR_ALPHA_RATIO:
+            return QueryQualityAssessment(
+                is_unclear=True,
+                reason="noisy_or_gibberish_query",
+                normalized_query=normalized_query or query_norm,
+                clarification_prompt="I did not fully understand that. Could you rephrase your question in one simple sentence?",
+            )
+
+        abbrev_hits = [t for t in tokens if t in self._ABBREVIATION_MAP]
+        contains_subject = self._contains_subject_keyword(normalized_query)
+        if abbrev_hits and not contains_subject and len(tokens) <= 5:
+            return QueryQualityAssessment(
+                is_unclear=True,
+                reason="ambiguous_abbreviation_query",
+                normalized_query=normalized_query or query_norm,
+                clarification_prompt="Can you clarify what you mean and include the full subject/topic name?",
+            )
+
+        return QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query=normalized_query or query_norm,
+            clarification_prompt=None,
+        )
 
     async def analyze(
         self, 

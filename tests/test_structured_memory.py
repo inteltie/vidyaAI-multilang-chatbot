@@ -73,10 +73,17 @@ async def test_memory():
     print("\n--- STICKY SUMMARY VERIFICATION ---")
     if session.structured_summary:
         print("✅ Structured summary found!")
-        print(json.dumps(session.structured_summary, indent=2))
+        summary_payload = (
+            session.structured_summary.model_dump()
+            if hasattr(session.structured_summary, "model_dump")
+            else session.structured_summary
+        )
+        print(json.dumps(summary_payload, indent=2))
         
         # Check entities
-        entities = session.structured_summary.get("key_entities", {})
+        entities = summary_payload.get("key_entities", {}) if isinstance(summary_payload, dict) else {}
+        if hasattr(entities, "model_dump"):
+            entities = entities.model_dump()
         if "John" in str(entities.get("name", "")):
             print("✅ Successfully extracted name: John")
         if "Photosynthesis" in str(entities.get("topic", "")):

@@ -3,6 +3,7 @@
 import json
 import logging
 import asyncio
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
@@ -337,6 +338,20 @@ class ReActAgent:
         messages = []
         structured_summary = (session_metadata or {}).get("structured_summary")
         
+        # Accept both typed Pydantic models and legacy dict payloads.
+        structured_summary_data: Dict[str, Any] = {}
+        if structured_summary:
+            if isinstance(structured_summary, Mapping):
+                structured_summary_data = dict(structured_summary)
+            elif hasattr(structured_summary, "model_dump"):
+                structured_summary_data = structured_summary.model_dump()
+            else:
+                structured_summary_data = {
+                    "summary": getattr(structured_summary, "summary", ""),
+                    "key_entities": getattr(structured_summary, "key_entities", {}),
+                    "user_preferences": getattr(structured_summary, "user_preferences", ""),
+                }
+        
         # Format metadata for context
         context_items = []
         if session_metadata:
@@ -350,12 +365,35 @@ class ReActAgent:
         # 1. System Prompt
         # Use structured summary if available, fallback to simple summary
         summary_section = ""
-        if structured_summary:
+        if structured_summary_data:
+            key_entities = structured_summary_data.get("key_entities") or {}
+            if hasattr(key_entities, "model_dump"):
+                key_entities = key_entities.model_dump()
+            elif not isinstance(key_entities, Mapping):
+                key_entities = {}
+
+            try:
+                key_entities_text = json.dumps(key_entities)
+            except TypeError:
+                try:
+                    key_entities_text = json.dumps(key_entities, default=str)
+                except Exception:
+                    key_entities_text = str(key_entities)
+            
+            user_preferences = structured_summary_data.get("user_preferences")
+            if isinstance(user_preferences, list):
+                user_preferences_text = ", ".join(str(item) for item in user_preferences if str(item).strip())
+            elif user_preferences is None:
+                user_preferences_text = ""
+            else:
+                user_preferences_text = str(user_preferences)
+            user_preferences_text = user_preferences_text.strip()
+
             summary_section = (
                 "\n\n### CONVERSATION CONTEXT (RECONSTRUCTED MEMORY):\n"
-                f"- **Overview**: {structured_summary.get('summary', '')}\n"
-                f"- **Key Entities**: {json.dumps(structured_summary.get('key_entities', {}))}\n"
-                f"- **User Preferences**: {', '.join(structured_summary.get('user_preferences', []))}\n"
+                f"- **Overview**: {structured_summary_data.get('summary', '')}\n"
+                f"- **Key Entities**: {key_entities_text}\n"
+                f"- **User Preferences**: {user_preferences_text}\n"
             )
         elif summary:
             summary_section = f"\n\nCONVERSATION SUMMARY:\n{summary}"
