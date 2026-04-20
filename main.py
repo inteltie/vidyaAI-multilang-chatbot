@@ -131,7 +131,13 @@ class BackendApp:
                     api_key=self._settings.openai_api_key,
                 )
                 from services import MemoryService, RetrieverService
-                temp_mem = MemoryService(self._redis_client, llm)
+                llm_summary = ChatOpenAI(
+                    model=self._settings.summary_model_name,
+                    api_key=self._settings.openai_api_key,
+                    temperature=0.0,
+                    max_retries=1,
+                )
+                temp_mem = MemoryService(self._redis_client, llm, llm_summary)
                 temp_retriever = RetrieverService(self._settings)
                 
                 await asyncio.gather(
@@ -197,13 +203,35 @@ class BackendApp:
             max_retries=1,
         )
 
+        # Auxiliary LLMs for specific tasks mapped to cost-effective models like gpt-4.1-nano
+        llm_analyzer = ChatOpenAI(
+            model=self._settings.analyzer_model_name,
+            api_key=self._settings.openai_api_key,
+            temperature=0.0,
+            max_retries=1,
+        )
+
+        llm_translator = ChatOpenAI(
+            model=self._settings.translator_model_name,
+            api_key=self._settings.openai_api_key,
+            temperature=0.0,
+            max_retries=1,
+        )
+
+        llm_summary = ChatOpenAI(
+            model=self._settings.summary_model_name,
+            api_key=self._settings.openai_api_key,
+            temperature=0.0,
+            max_retries=1,
+        )
+
         # Services
         # self._redis_client is guaranteed to be not None here due to lifespan
-        memory_service = MemoryService(self._redis_client, llm)
+        memory_service = MemoryService(self._redis_client, llm, llm_summary)
         
         # fastText-based language detector (no LLM calls)
         # language_detector = LanguageDetector()
-        translator = Translator(llm)
+        translator = Translator(llm_translator)
         context_parser = ContextParser(llm)
         # intent_classifier removed as it was unused
         retriever_service = RetrieverService(self._settings)
@@ -214,7 +242,7 @@ class BackendApp:
         # Agent services
         from agents import ConversationalAgent, StudentAgent, TeacherAgent, InteractiveStudentAgent
         
-        query_classifier = QueryClassifier(llm)
+        query_classifier = QueryClassifier(llm_analyzer)
         conversational_agent = ConversationalAgent(llm)
         
         # Student and Teacher agents with ReAct reasoning
@@ -393,6 +421,12 @@ class BackendApp:
                 output_tokens = int(final_state.get("output_tokens", 0) or 0)
                 total_tokens = input_tokens + output_tokens
 
+                # Model-specific tracking
+                primary_input_tokens = int(final_state.get("primary_input_tokens", 0) or 0)
+                primary_output_tokens = int(final_state.get("primary_output_tokens", 0) or 0)
+                aux_input_tokens = int(final_state.get("aux_input_tokens", 0) or 0)
+                aux_output_tokens = int(final_state.get("aux_output_tokens", 0) or 0)
+
                 # Include background summarization tokens since last response (if any)
                 bg_input_tokens = 0
                 bg_output_tokens = 0
@@ -426,6 +460,10 @@ class BackendApp:
                     background_output_tokens=bg_output_tokens,
                     background_total_tokens=bg_total_tokens,
                     total_tokens_with_background=total_with_background,
+                    primary_input_tokens=primary_input_tokens,
+                    primary_output_tokens=primary_output_tokens,
+                    aux_input_tokens=aux_input_tokens,
+                    aux_output_tokens=aux_output_tokens,
                 )
 
             except HTTPException:

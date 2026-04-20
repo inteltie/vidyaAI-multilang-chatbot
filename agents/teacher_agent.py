@@ -116,6 +116,10 @@ class TeacherAgent:
                 updates["llm_calls"] = result.get("iterations", 0)
                 updates["input_tokens"] = result.get("input_tokens", 0)
                 updates["output_tokens"] = result.get("output_tokens", 0)
+                
+                # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
+                updates["primary_input_tokens"] = result.get("input_tokens", 0)
+                updates["primary_output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Teacher Agent completed with %d iterations, %d citations",
@@ -187,6 +191,7 @@ CRITICAL RULES FOR TEACHER ASSISTANCE:
    - **SILENT FAILURE**: If no documents are found, NEVER say "no information found". Instead, ask a professional clarifying question about the analytical goal.
 5. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core analysis.
 6. **Citations [STRICT]**: Do NOT include any source labels or citations (e.g., [Source 1]) in your text.
+7. **Response Language [STRICT]**: ALWAYS respond in English. (Translation will be handled by a separate process).
 
 3. **ANALYTICAL TONE**: 
    - Use professional, analytical language
@@ -211,12 +216,12 @@ CRITICAL RULES FOR TEACHER ASSISTANCE:
    - Provide structured information
    - DO NOT use any source labels or citations in the text.
    - Focus on the *content* and *analysis*
-   - **LANGUAGE**: Your final response MUST be in {target_lang}.
+   - **LANGUAGE**: Your final response MUST be in English.
 
 HOW TO RESPOND:
 
 - **TO SEARCH**: Call the `retrieve_documents` tool. Do not write "Action:" or "Thought:" in your text response, just use the tool.
-- **TO ANSWER**: Write your final response directly in {target_lang}.
+- **TO ANSWER**: Write your final response directly in English.
 
 EXAMPLES:
 

@@ -129,14 +129,14 @@ Focus: {identity['focus']}
 3. **AMBIGUITY HANDLING**: If the student's message is vague or ambiguous, politely ask for clarification instead of guessing based on history.
 4. **NO META-TALK**: Never say "I searched" or "Based on documents".
 5. **Citations [STRICT]**: Do NOT include any source labels or citations (e.g., [Source 1]) in your text.
-6. **Target Language [STRICT]**: {target_lang}.
+6. **Response Language [STRICT]**: ALWAYS respond in English. (Translation will be handled by a separate process).
 7. **Efficiency**: {efficiency_instruction}
 8. **NO EXTERNAL LINKS [MANDATORY]**: Never mention or link to external websites, platforms, or tools (e.g., Coursera, Khan Academy, Wikipedia, YouTube). Use ONLY the provided local information. 
 9. **BREVITY (MANDATORY)**: Keep your response concise (50-100 tokens). Unless the user asks for more detail, provide only core information.
 {correction_instruction}
 
 HOW TO RESPOND:
-- Provide your response in {target_lang}, strictly embodying **{identity['name']}** through the rules above.
+- Provide your response in English, strictly embodying **{identity['name']}** through the rules above.
 - Do NOT use any source labels or citations in the text.
 - Stick to the **50-100 token limit** unless detail is specifically requested.
 """
@@ -217,6 +217,10 @@ HOW TO RESPOND:
                 updates["llm_calls"] = result.get("iterations", 0)
                 updates["input_tokens"] = result.get("input_tokens", 0)
                 updates["output_tokens"] = result.get("output_tokens", 0)
+                
+                # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
+                updates["primary_input_tokens"] = result.get("input_tokens", 0)
+                updates["primary_output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Student Agent completed with %d iterations, %d citations",

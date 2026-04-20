@@ -119,6 +119,13 @@ class AgentState(TypedDict, total=False):
     needs_context: bool
     citations: Annotated[List[Citation], merge_citations]
     timings: Annotated[Dict[str, float], merge_timings]
+    # Token tracking by model type (Nano vs Mini)
+    primary_input_tokens: Annotated[int, operator.add]
+    primary_output_tokens: Annotated[int, operator.add]
+    aux_input_tokens: Annotated[int, operator.add]
+    aux_output_tokens: Annotated[int, operator.add]
+
+    # Legacy / Aggregate fields (keep for compatibility/simplicity)
     llm_calls: Annotated[int, operator.add]
     input_tokens: Annotated[int, operator.add]
     output_tokens: Annotated[int, operator.add]

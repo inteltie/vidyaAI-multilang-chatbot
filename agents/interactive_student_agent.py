@@ -214,6 +214,10 @@ HOW TO RESPOND:
                 updates["llm_calls"] = result.get("iterations", 0)
                 updates["input_tokens"] = result.get("input_tokens", 0)
                 updates["output_tokens"] = result.get("output_tokens", 0)
+                
+                # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
+                updates["primary_input_tokens"] = result.get("input_tokens", 0)
+                updates["primary_output_tokens"] = result.get("output_tokens", 0)
             
             logger.info(
                 "Interactive Student Agent completed with %d iterations",

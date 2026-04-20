@@ -46,23 +46,25 @@ class GroundednessCheckNode:
             return {"timings": {"groundedness_check": duration}}
 
         target_lang = state.get("language", "en")
+        query_en = state.get("query_en", state.get("query"))
         
-        # Skip validation for English as it's the base language
-        if target_lang == "en":
-            logger.info("Skipping language validation for English response.")
+        if not query_en:
+            logger.warning("Missing query content for groundedness check. Skipping.")
             duration = perf_counter() - start
             return {"timings": {"groundedness_check": duration}}
 
-        query = state.get("query_en", state.get("query"))
+        documents = state.get("documents", [])
 
-        logger.info("Running language consistency check for query: %s", query[:50])
+        logger.info("Running groundedness and language consistency check for query: %s", query_en[:50])
         
         import asyncio
         try:
             result = await asyncio.wait_for(
                 self._validator.validate(
                     response=response,
-                    target_lang=target_lang
+                    target_lang=target_lang,
+                    documents=documents,
+                    query=query_en
                 ),
                 timeout=10.0
             )
@@ -71,31 +73,17 @@ class GroundednessCheckNode:
             from services.response_validator import ValidationResult
             result = ValidationResult(is_valid=True, reasoning="Validation timed out, passed for stability.")
 
-        state["validation_results"] = result.dict()
-
-        if not result.is_valid:
-            logger.warning("Language mismatch detected! Feedback: %s", result.feedback)
-        else:
-            logger.info("Response language validated successfully.")
-
-        # Track validation LLM call
-        state["llm_calls"] = state.get("llm_calls", 0) + 1
-
         duration = perf_counter() - start
         
         # Prepare updates
         updates = {
-            "timings": {"groundedness_check": duration}
+            "timings": {"groundedness_check": duration},
+            "validation_results": result.dict(),
+            "llm_calls": 1,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "aux_input_tokens": result.input_tokens,
+            "aux_output_tokens": result.output_tokens
         }
-        
-        # Only include fields that were potentially modified
-        if "result" in locals():
-            updates["validation_results"] = result.dict()
-            updates["llm_calls"] = 1
-            updates["input_tokens"] = result.input_tokens
-            updates["output_tokens"] = result.output_tokens
-            
-            if state.get("is_correction"):
-                updates["response"] = state["response"]
         
         return updates

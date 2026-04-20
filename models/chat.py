@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from beanie import Document
 from pydantic import BaseModel, Field
@@ -17,12 +17,26 @@ class ChatMessage(BaseModel):
     text: str
     timestamp: datetime = Field(default_factory=get_ist_now)
 
+class KeyEntities(BaseModel):
+    """Extracted entities from a chat session."""
+    name: Optional[str] = None
+    topic: Optional[str] = None
+    identified_gaps: Optional[str] = None
+    others: Optional[Dict[str, Any]] = None
+
+class StructuredSummary(BaseModel):
+    """Structured compaction of a conversation turn."""
+    summary: str = Field(..., description="A 3-5 sentence overview of the conversation.")
+    key_entities: Optional[KeyEntities] = Field(None, description="Key entities like student name, topic, and learning gaps.")
+    user_preferences: Optional[str] = Field(None, description="User mentioned preferences or constraints.")
+
 class ChatSession(Document):
     """Document model for a chat session."""
     user_id: str
     session_id: str
     title: Optional[str] = None
     summary: Optional[str] = None
+    structured_summary: Optional[StructuredSummary] = None
     messages: List[ChatMessage] = []
     is_summarizing: bool = False
     created_at: datetime = Field(default_factory=get_ist_now)

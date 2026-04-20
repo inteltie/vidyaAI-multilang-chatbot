@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from langchain_openai import ChatOpenAI
 
@@ -75,16 +76,22 @@ class Translator:
             logger.warning("Translation to English failed: %s", exc)
             return text, 0, 0
 
-    async def from_english(self, text: str, target_lang: str) -> tuple[str, int, int]:
+    async def from_english(self, text: str, target_lang: str, context: Optional[str] = None) -> tuple[str, int, int]:
         """Translate an English text to the target language, returning original on failure."""
         if target_lang == "en":
             return text, 0, 0
         lang_label = _lang_name(target_lang)
+        
+        context_instr = f" Context/Subject: {context}." if context else ""
+        
         prompt = (
-            f"You are a professional translator. Task: Ensure the following text is in **{lang_label}**. \n\n"
+            f"You are a professional educational translator.{context_instr} "
+            f"Task: Ensure the following text is in **{lang_label}**. \n\n"
             f"1. If the text is NOT in {lang_label}, translate it ENTIRELY into {lang_label}.\n"
             f"2. If the text is ALREADY in {lang_label}, return it exactly as it is.\n\n"
-            "Preserve technical terms and academic structure. Respond ONLY with the final text.\n\n"
+            "Preserve technical terms, academic structure, and formatting. "
+            "If a technical term is commonly used in English (like 'Photosynthesis' or 'DevOps'), you may keep it in English with a translation in parentheses if helpful.\n\n"
+            "Respond ONLY with the final translated text.\n\n"
             f"Text: {text}"
         )
         try:

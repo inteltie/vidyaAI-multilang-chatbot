@@ -22,11 +22,22 @@ class RetrieveDocumentsNode:
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
         start = perf_counter()
         
-        query_en = state["query_en"]
+        query_en = state.get("query_en")
         query_raw = state.get("query", "")
         # Use explicit request filters provided in the request body
         request_filters = state.get("request_filters", {})
         
+        if not query_en:
+            logger.warning("Missing query_en for document retrieval. Skipping.")
+            return {
+                "documents": [],
+                "prefilled_observations": [],
+                "rag_quality": "low",
+                "citations": [],
+                "llm_calls": 0,
+                "timings": {"retrieve_documents": perf_counter() - start}
+            }
+
         logger.info("Retrieving documents for query: %s", query_en[:50])
         
         # Sanitize filters: Strip additionalProp1
@@ -39,26 +50,20 @@ class RetrieveDocumentsNode:
         needs_web_proactive = any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"])
         
         # Speculative RAG reuse logic
-        speculative_docs = state.get("speculative_documents")
+        speculative_docs = state.get("documents")
         can_use_speculative = False
         
-        if speculative_docs is not None:
-             # Logic: if query_en is basically the same as the one used for speculative RAG, reuse it.
-             # We can't easily check what query was used in AnalyzeQueryNode without storing it, 
-             # but we can assume it was the raw 'query' field.
-             raw_query = state.get("query", "")
-             if query_en.lower() == raw_query.lower() or (len(query_en) > 0 and query_en in raw_query):
-                 logger.info("Reusing speculative RAG results (queries match).")
-                 can_use_speculative = True
-             else:
-                 logger.info("Speculative RAG mismatch: raw='%s', analyzed='%s'. Re-fetching.", raw_query[:20], query_en[:20])
+        if speculative_docs:
+             # Logic: if we have documents from AnalyzeQueryNode, reuse them.
+             logger.info("Reusing speculative RAG results (found %d docs in state).", len(speculative_docs))
+             can_use_speculative = True
 
         # Define tasks (or use speculative result)
         rag_timeout = 15.0
         try:
             if can_use_speculative:
                 docs = speculative_docs
-                web_results = None # We'll check for proactive web search below
+                web_results = None 
             else:
                 rag_task = self._retriever.retrieve(
                     query_en=query_en,

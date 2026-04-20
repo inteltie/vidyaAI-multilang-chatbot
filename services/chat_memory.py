@@ -22,9 +22,10 @@ class MemoryService:
     Uses Redis for short-term buffer and MongoDB for long-term storage.
     """
 
-    def __init__(self, redis_client: aioredis.Redis, llm: BaseChatModel) -> None:
+    def __init__(self, redis_client: aioredis.Redis, llm: BaseChatModel, summary_llm: Optional[BaseChatModel] = None) -> None:
         self._redis = redis_client
         self._llm = llm
+        self._summary_llm = summary_llm or llm
         self._memory_token_limit = getattr(settings, "memory_token_limit", 2000)
         self.SESSION_RESTART_THRESHOLD = 7200  # 2 hours in seconds
         self._tokenizer_warmed = False
@@ -245,25 +246,43 @@ class MemoryService:
                 recent_messages = session.messages[-20:]
                 messages_text = "\n".join([f"{m.role}: {m.text}" for m in recent_messages])
                 
-                if session.summary:
-                    prompt = (
-                        f"Here is a summary of the conversation so far:\n{session.summary}\n\n"
-                        f"Here are the latest 20 messages:\n{messages_text}\n\n"
-                        "Update the summary to include the new information, keeping it concise (3-5 sentences). "
-                        "Preserve key topics, constraints, and user preferences."
-                    )
-                else:
-                    prompt = (
-                        "Summarize the following conversation in 3-5 sentences, capturing key topics and user preferences.\n\n"
-                        f"{messages_text}"
-                    )
+                # Use structured summary if available, fallback to simple summary
+                current_summary = session.structured_summary or {"summary": session.summary or ""}
                 
-                response = await self._llm.ainvoke(
+                prompt = (
+                    "You are a memory compaction system. Your goal is to maintain a structured summary of the conversation.\n"
+                    "Extract and update the following information in JSON format:\n"
+                    "1. summary: A 3-5 sentence overview of the conversation.\n"
+                    "2. key_entities: {name, topic, identified_gaps, others}: Extract the student's name, the main subjects discussed, and specific learning gaps identified.\n"
+                    "3. user_preferences: Any explicit preferences or constraints the user mentioned.\n\n"
+                    f"Previous Data: {json.dumps(current_summary)}\n\n"
+                    f"New Messages:\n{messages_text}\n\n"
+                    "Output ONLY valid JSON."
+                )
+                
+                # Use dedicated summary LLM (Nano)
+                response = await self._summary_llm.ainvoke(
                     prompt,
                     config={"max_tokens": self._summary_max_tokens},
                 )
-                summary = self._truncate_summary(response.content.strip())
                 
+                raw_content = response.content.strip()
+                # Remove triple backticks ONLY if both opening and closing fences are present
+                if raw_content.startswith("```json") and raw_content.endswith("```"):
+                    raw_content = raw_content[7:-3].strip()
+                elif raw_content.startswith("```") and raw_content.endswith("```"):
+                    raw_content = raw_content[3:-3].strip()
+                
+                try:
+                    structured_summary = json.loads(raw_content)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse structured summary JSON for %s. Content: %s", session_id, raw_content)
+                    # Fallback to simple summary in string field for safety
+                    structured_summary = None
+                    summary_str = self._truncate_summary(raw_content)
+                else:
+                    summary_str = self._truncate_summary(structured_summary.get("summary", ""))
+
                 # Track token usage for background summarization
                 usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
                 if usage:
@@ -280,11 +299,16 @@ class MemoryService:
                         logger.debug("Failed to record background token usage: %s", e)
                 
                 # 2. Atomic update for summary AND lock release
-                # We use find_one().update() or just ChatSession.find(...).update()
+                update_data = {"is_summarizing": False}
+                if summary_str:
+                    update_data["summary"] = summary_str
+                if structured_summary:
+                    update_data["structured_summary"] = structured_summary
+                
                 await ChatSession.find_one(ChatSession.session_id == session_id).update(
-                    {"$set": {"summary": summary, "is_summarizing": False}}
+                    {"$set": update_data}
                 )
-                logger.info(f"Updated summary for session {session_id}")
+                logger.info(f"Updated structured summary for session {session_id}")
             except Exception as e:
                 # Ensure lock is released even on LLM failure
                 await ChatSession.find_one(ChatSession.session_id == session_id).update(
@@ -370,7 +394,10 @@ class MemoryService:
         return {
             "conversation_history": trimmed_history,
             "is_session_restart": is_restart,
-            "session_metadata": {"summary": summary} if summary else {}
+            "session_metadata": {
+                "summary": summary,
+                "structured_summary": session.structured_summary
+            } if (summary or session.structured_summary) else {}
         }
 
     async def get_history(self, session_id: str) -> List[ConversationTurn]:

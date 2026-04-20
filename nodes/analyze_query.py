@@ -132,6 +132,8 @@ class AnalyzeQueryNode:
             ) else 1,
             "input_tokens": updates["input_tokens"] + result.input_tokens,
             "output_tokens": updates["output_tokens"] + result.output_tokens,
+            "aux_input_tokens": updates.get("aux_input_tokens", 0) + result.input_tokens,
+            "aux_output_tokens": updates.get("aux_output_tokens", 0) + result.output_tokens,
         })
         
         
@@ -158,6 +160,28 @@ class AnalyzeQueryNode:
                 new_meta["lecture_id"] = result.lecture_id
             
             updates["session_metadata"] = new_meta
+            
+            # -- SPECULATIVE RAG --
+            # Trigger retrieval early if we have a translated query and subjects
+            if self._retriever and result.translated_query:
+                try:
+                    from config import settings
+                    if settings.parallel_rag_fetch:
+                        logger.info("Executing speculative RAG for query: %s", result.translated_query[:50])
+                        # We use the translated query and any extracted metadata for better retrieval
+                        search_filters = state.get("request_filters", {}).copy()
+                        if result.lecture_id:
+                            search_filters["lecture_id"] = result.lecture_id
+                        
+                        # Trigger search (await here as it's fast, but could be backgrounded if needed)
+                        docs = await self._retriever.retrieve(
+                            query_en=result.translated_query,
+                            filters=search_filters
+                        )
+                        updates["documents"] = docs
+                        logger.info("Speculative RAG fetched %d documents", len(docs))
+                except Exception as e:
+                    logger.warning("Speculative RAG failed: %s", e)
             
         # If we had a heuristic match, mark that we skipped the LLM
         if result.confidence >= 1.0 and "Matched" in result.reasoning:

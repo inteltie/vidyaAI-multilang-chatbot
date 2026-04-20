@@ -335,26 +335,37 @@ class ReActAgent:
     ) -> List[Any]:
         """Build the initial message list incorporating summary and trimmed history."""
         messages = []
+        structured_summary = (session_metadata or {}).get("structured_summary")
         
         # Format metadata for context
-        context_str = ""
+        context_items = []
         if session_metadata:
-            context_items = []
             if session_metadata.get("class_name"):
                 context_items.append(f"Class: {session_metadata['class_name']}")
             if session_metadata.get("subject"):
                 context_items.append(f"Subject: {session_metadata['subject']}")
             if session_metadata.get("topics"):
                 context_items.append(f"Topic: {session_metadata['topics']}")
-            
-            if context_items:
-                context_str = "\nCONTEXT:\n" + "\n".join(context_items)
         
-        # System prompt incorporating summary (Phase 5)
-        summary_text = f"\n\nCONVERSATION SUMMARY:\n{summary}" if summary else ""
+        # 1. System Prompt
+        # Use structured summary if available, fallback to simple summary
+        summary_section = ""
+        if structured_summary:
+            summary_section = (
+                "\n\n### CONVERSATION CONTEXT (RECONSTRUCTED MEMORY):\n"
+                f"- **Overview**: {structured_summary.get('summary', '')}\n"
+                f"- **Key Entities**: {json.dumps(structured_summary.get('key_entities', {}))}\n"
+                f"- **User Preferences**: {', '.join(structured_summary.get('user_preferences', []))}\n"
+            )
+        elif summary:
+            summary_section = f"\n\nCONVERSATION SUMMARY:\n{summary}"
+
+        context_str = ""
+        if context_items:
+            context_str = "\nCONTEXT:\n" + "\n".join(context_items)
         
         if hasattr(self, "build_system_prompt"):
-            system_prompt = self.build_system_prompt(query, session_metadata) + summary_text
+            system_prompt = self.build_system_prompt(query, session_metadata) + summary_section
         else:
             system_prompt = (
                 "You are an educational AI. Answer using retrieved docs.\n"
@@ -367,14 +378,20 @@ class ReActAgent:
                 "6. No general knowledge. If not in docs, say 'I don't know'.\n"
                 "7. Use MathJax for formulas (\\(x\\) inline, \\[y\\] block)."
                 f"{context_str}"
-                f"{summary_text}"
+                f"{summary_section}"
             )
         messages.append(SystemMessage(content=system_prompt))
         
-        # History (Phase 0/5: Already trimmed by MemoryService)
-        messages.extend(history)
+        # 2. History (Aggressive Local Truncation)
+        # If we have a summary, we only need the last few messages for immediate context/flow.
+        # Otherwise, use the full provided history (which is already limited by MemoryService).
+        if (summary or structured_summary) and len(history) > 4:
+            logger.info("Applying aggressive local truncation: keeping last 4 messages due to summary availability.")
+            messages.extend(history[-4:])
+        else:
+            messages.extend(history)
                 
-        # Current query
+        # 3. Current query
         messages.append(HumanMessage(content=query))
         
         return messages

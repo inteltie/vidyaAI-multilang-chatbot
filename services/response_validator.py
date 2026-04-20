@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 class ValidationResult(BaseModel):
     """Result of a response validation check."""
-    is_valid: bool = Field(description="Whether the response matches the expected language.")
+    is_valid: bool = Field(description="Whether the response is grounded and in the correct language.")
     reasoning: str = Field(description="Explanation for the validation result.")
-    feedback: Optional[str] = Field(default=None, description="Corrective feedback if language mismatch.")
+    feedback: Optional[str] = Field(default=None, description="Corrective feedback if validation fails.")
     input_tokens: int = Field(default=0)
     output_tokens: int = Field(default=0)
 
@@ -29,24 +29,43 @@ class ResponseValidator:
         self,
         response: str,
         target_lang: str,
+        documents: Optional[List[Document]] = None,
+        query: Optional[str] = None
     ) -> ValidationResult:
         """
-        Verify if the response matches the target language.
+        Verify if the response is grounded in documents and matches the target language.
         """
-        prompt = f"""You are a Language Consistency Checker. Your ONLY job is to verify if the AI Agent's response is in the CORRECT language.
+        doc_context = ""
+        if documents:
+            doc_context = "\n".join([f"- {doc.get('text', '')}" for doc in documents])
+        
+        prompt = f"""You are an Educational Response Validator. Your job is to ensure the AI's response is GROUNDED and LINGUISTICALLY CORRECT.
 
+### TASK 1: Groundedness Check
+Compare the response against the provided documents.
+- Does the response contain information NOT found in the documents? (Technical jargon is fine, but new facts are not).
+- Is it factually consistent with the documents?
+
+### TASK 2: Language Check
+- Is the response in {target_lang}? 
+- Technical terms in English are allowed.
+
+### INPUTS:
+User Query: {query if query else "N/A"}
 Target Language: {target_lang}
+
+Retrieved Documents:
+{doc_context if doc_context else "No documents provided."}
 
 Agent's Response:
 {response}
 
-VERIFICATION TASK:
-1. Is the response ENTIRELY or PREDOMINANTLY in {target_lang}? 
-2. If the response contains mixed languages or is in a completely different language (e.g., English instead of Hindi), mark `is_valid` as False.
-3. Technical terms or formulas in English are acceptable if they are commonly used.
-
-RETRY FEEDBACK:
-- If `is_valid` is False, provide `feedback` like "Translate the response into {target_lang}."
+### VERIFICATION CRITERIA:
+1. `is_valid` = False if:
+   - There is a factual hallucination (info not in docs).
+   - The response is in the wrong language.
+   - The response is off-topic.
+2. Provide specific `feedback` for the agent to correct itself.
 """
 
         from config import settings

@@ -104,6 +104,11 @@ class ChatResponse(BaseModel):
         0,
         description="Total tokens including background summarization since last response.",
     )
+    # Granular token tracking for gpt-4.1-nano vs gpt-4o-mini
+    primary_input_tokens: int = Field(0, description="Input tokens for main Reasoning model (Mini)")
+    primary_output_tokens: int = Field(0, description="Output tokens for main Reasoning model (Mini)")
+    aux_input_tokens: int = Field(0, description="Input tokens for auxiliary models (Nano)")
+    aux_output_tokens: int = Field(0, description="Output tokens for auxiliary models (Nano)")
 
 
 class ErrorResponse(BaseModel):

@@ -150,27 +150,25 @@ class ChatbotGraphBuilder:
         )
 
         # 5. Sequential Validation and Translation for Educational Flow
-        # This ensures the groundedness check validates the FINAL translated response.
+        # This ensures the groundedness check validates the FINAL English response BEFORE translation.
         
-        graph.add_node("translate_response_educational", self._translate_response)
-        
-        # Link educational agents to translation
-        graph.add_edge("student_agent", "translate_response_educational")
-        graph.add_edge("interactive_student_agent", "translate_response_educational")
-        graph.add_edge("teacher_agent", "translate_response_educational")
-        
-        # After translation, run groundedness check
-        graph.add_edge("translate_response_educational", "groundedness_check")
+        # Link educational agents to groundedness check
+        graph.add_edge("student_agent", "groundedness_check")
+        graph.add_edge("interactive_student_agent", "groundedness_check")
+        graph.add_edge("teacher_agent", "groundedness_check")
         
         # Routing after validation completes
         graph.add_conditional_edges(
             "groundedness_check",
             self._route_after_validation,
             {
-                "pass": "save_memory",
+                "pass": "translate_response_educational",
                 "fail": "route_educational_user",  # Self-correction loop
             }
         )
+
+        graph.add_node("translate_response_educational", self._translate_response)
+        graph.add_edge("translate_response_educational", "save_memory")
 
         # 6. Finalization: Save -> END
         graph.add_edge("translate_response", "save_memory")

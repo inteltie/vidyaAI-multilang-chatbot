@@ -34,9 +34,12 @@ class Settings(BaseModel):
     mongo_db_name: str = Field(..., description="MongoDB Database Name")
 
     # -- Model Settings --
-    model_name: str = Field("gpt-4o-mini", description="LLM Model Name")
+    model_name: str = Field("gpt-4o-mini", description="Main Agent LLM Model")
     web_search_model_name: str = Field("", description="Web Search Model Name")
-    validator_model_name: str = Field("gpt-4o-mini", description="Validator Model Name")
+    validator_model_name: str = Field("gpt-4.1-nano", description="Validator Model Name")
+    analyzer_model_name: str = Field("gpt-4.1-nano", description="Query Analyzer Model Name")
+    translator_model_name: str = Field("gpt-4.1-nano", description="Translator Model Name")
+    summary_model_name: str = Field("gpt-4.1-nano", description="Background Summarizer Model Name")
     embedding_model: str = Field("text-embedding-3-large", description="Embedding Model Name")
     llm_temperature: float = Field(0.0, description="LLM Temperature")
 
@@ -62,8 +65,8 @@ class Settings(BaseModel):
     validation_mode: Literal["strict", "fast", "disabled"] = Field("fast", description="Groundedness validation mode")
     enable_query_caching: bool = Field(True, description="Enable caching for query analysis")
     cache_size: int = Field(1000, description="Size of query analysis cache")
-    query_cache_ttl: int = Field(1800, description="Query classification cache TTL (seconds)")
-    resolved_query_cache_ttl: int = Field(7200, description="Resolved query cache TTL (seconds)")
+    query_cache_ttl: int = Field(3600, description="Query classification cache TTL (seconds)")
+    resolved_query_cache_ttl: int = Field(14400, description="Resolved query cache TTL (seconds)")
     parallel_rag_fetch: bool = Field(True, description="Enable parallel RAG retrieval")
     
     # Retrieval
@@ -90,7 +93,10 @@ class Settings(BaseModel):
             
             "model_name": os.getenv("MODEL_NAME") or os.getenv("LLM_MODEL") or "gpt-4o-mini",
             "web_search_model_name": os.getenv("WEB_SEARCH_MODEL_NAME") or "gpt-4o-mini",
-            "validator_model_name": os.getenv("VALIDATOR_MODEL_NAME") or "gpt-4o-mini",
+            "validator_model_name": os.getenv("VALIDATOR_MODEL_NAME") or "gpt-4.1-nano",
+            "analyzer_model_name": os.getenv("ANALYZER_MODEL_NAME") or "gpt-4.1-nano",
+            "translator_model_name": os.getenv("TRANSLATOR_MODEL_NAME") or "gpt-4.1-nano",
+            "summary_model_name": os.getenv("SUMMARY_MODEL_NAME") or "gpt-4.1-nano",
             "embedding_model": os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large",
             "llm_temperature": float(os.getenv("LLM_TEMPERATURE") or 0.0),
             
@@ -112,8 +118,8 @@ class Settings(BaseModel):
             "validation_mode": (os.getenv("VALIDATION_MODE") or "fast").lower(),
             "enable_query_caching": str_to_bool(os.getenv("ENABLE_QUERY_CACHING", "True")),
             "cache_size": int(os.getenv("CACHE_SIZE") or 1000),
-            "query_cache_ttl": int(os.getenv("QUERY_CACHE_TTL") or 1800),
-            "resolved_query_cache_ttl": int(os.getenv("RESOLVED_QUERY_CACHE_TTL") or 7200),
+            "query_cache_ttl": int(os.getenv("QUERY_CACHE_TTL") or 3600),
+            "resolved_query_cache_ttl": int(os.getenv("RESOLVED_QUERY_CACHE_TTL") or 14400),
             "parallel_rag_fetch": str_to_bool(os.getenv("PARALLEL_RAG_FETCH"), True),
             
             "retriever_top_k": int(os.getenv("RETRIEVER_TOP_K") or 3),
