@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict
 from time import perf_counter
 
@@ -25,6 +26,80 @@ class AnalyzeQueryNode:
         self._classifier = classifier
         self._detector = detector
         self._retriever = retriever
+
+    @staticmethod
+    def _detect_memory_intent(query: str) -> str | None:
+        """Detect direct memory lookup questions that should avoid follow-up expansion."""
+        q = (query or "").lower().strip()
+        if not q:
+            return None
+        q = re.sub(r"[^\w\s]", " ", q)
+        q = re.sub(r"\s+", " ", q).strip()
+
+        name_patterns = (
+            r"\bwhat is my name\b",
+            r"\bwhats my name\b",
+            r"\bwho am i\b",
+            r"\bmy name\b",
+        )
+        class_patterns = (
+            r"\bwhat is my class\b",
+            r"\bwhats my class\b",
+            r"\bwhich class am i in\b",
+            r"\bwhat class am i in\b",
+            r"\bi am in which class\b",
+            r"\bmy class\b",
+        )
+
+        if any(re.search(pat, q) for pat in name_patterns):
+            return "name"
+        if any(re.search(pat, q) for pat in class_patterns):
+            return "class_level"
+        return None
+
+    @staticmethod
+    def _parse_language_preference_instruction(query: str) -> tuple[str | None, bool]:
+        """Parse explicit user preference such as 'always reply in English'."""
+        q = (query or "").lower().strip()
+        if not q:
+            return None, False
+        normalized = re.sub(r"[^\w\s]", " ", q)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        explicit_markers = ("always", "from now on", "only", "reply in", "respond in", "speak in")
+        if not any(marker in normalized for marker in explicit_markers):
+            return None, False
+
+        english_markers = ("english", "en")
+        if any(re.search(rf"\b{re.escape(marker)}\b", normalized) for marker in english_markers):
+            return "en", True
+
+        lang_map = {
+            "hindi": "hi",
+            "marathi": "mr",
+            "japanese": "ja",
+            "spanish": "es",
+            "french": "fr",
+            "german": "de",
+            "norwegian": "no",
+            "swedish": "sv",
+        }
+        for name, code in lang_map.items():
+            if re.search(rf"\b{re.escape(name)}\b", normalized):
+                return code, True
+        return None, False
+
+    @staticmethod
+    def _extract_memory_language_preference(session_metadata: dict) -> str | None:
+        structured = (session_metadata or {}).get("structured_summary") or {}
+        if hasattr(structured, "model_dump"):
+            structured = structured.model_dump()
+        prefs = (structured or {}).get("user_preferences")
+        if not prefs:
+            return None
+        pref_text = str(prefs).lower()
+        if "english" in pref_text:
+            return "en"
+        return None
 
     async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
@@ -106,12 +181,23 @@ class AnalyzeQueryNode:
             }
             effective_query = quality.normalized_query or final_query
             query_norm = effective_query.lower().strip()
+            memory_intent = self._detect_memory_intent(effective_query)
+            if memory_intent:
+                updates["memory_intent"] = memory_intent
             
             if heuristic_result:
                 result = heuristic_result
                 logger.info(f"DEBUG: analyze_query set result to heuristic: {result.query_type}")
+            elif memory_intent:
+                result = QueryClassification(
+                    query_type="conversational",
+                    translated_query=effective_query,
+                    confidence=1.0,
+                    reasoning=f"Matched direct memory intent ({memory_intent}).",
+                    subjects=["General"],
+                )
             else:
-                is_followup = query_norm in followup_phrases or len(query_norm.split()) <= 3
+                is_followup = query_norm in followup_phrases
                 cached_resolved = None
                 if is_followup and user_session_id:
                     try:
@@ -154,6 +240,10 @@ class AnalyzeQueryNode:
             "query_en": result.translated_query,
             "query_type": result.query_type,
             "subjects": result.subjects,
+            "is_acknowledgment": bool(
+                result.query_type == "conversational"
+                and self._classifier._normalize_chat_phrase(query) in self._classifier._ACK_TOKENS
+            ),
             "llm_calls": 0 if (
                 result.reasoning.startswith("Used cached resolved query") or
                 result.reasoning.startswith("Cached result")
@@ -165,10 +255,33 @@ class AnalyzeQueryNode:
         })
         
         
-        # Language detection using FastText
-        detected_lang = self._detector.detect_language(query)
+        # Language detection and deterministic preference resolution
+        detected_lang, detect_confidence = self._detector.detect_language_with_confidence(query)
         updates["detected_language"] = detected_lang
-        updates["language"] = detected_lang  # Update the target language for response translation
+        updates["detected_language_confidence"] = detect_confidence
+
+        session_metadata = state.get("session_metadata", {})
+        prior_locked = bool(state.get("language_preference_locked", False))
+        prior_preferred = state.get("preferred_response_language")
+        memory_preferred = self._extract_memory_language_preference(session_metadata)
+        parsed_preferred, parsed_locked = self._parse_language_preference_instruction(query)
+
+        preferred_response_language = (
+            parsed_preferred
+            or prior_preferred
+            or memory_preferred
+            or "en"
+        )
+        language_preference_locked = parsed_locked or prior_locked or bool(memory_preferred)
+
+        # Resolve target language with explicit precedence:
+        # explicit/locked preference > memory preference > detected language.
+        effective_language = preferred_response_language if language_preference_locked else detected_lang
+        if not effective_language or str(effective_language).lower() == "null":
+            effective_language = "en"
+        updates["preferred_response_language"] = preferred_response_language
+        updates["language_preference_locked"] = language_preference_locked
+        updates["language"] = effective_language
         
         # Override state language if needed, or just keep as-is
         # Typically we want to know what language the current query is in regardless of request

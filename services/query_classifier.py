@@ -119,10 +119,23 @@ class QueryClassifier:
     _MIN_CLEAR_ALPHA_CHARS = 3
     _MIN_CLEAR_ALPHA_RATIO = 0.35
     _MAX_REPEAT_CHAR_RUN = 4
+    _ACK_TOKENS = {
+        "ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no",
+        "cool", "nice", "great", "hmm", "hm", "ohk", "got it", "understood",
+        "thx", "thanks", "thank you",
+    }
+
+    @staticmethod
+    def _normalize_chat_phrase(text: str) -> str:
+        normalized = re.sub(r"[^\w\s]", " ", (text or "").lower()).strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = re.sub(r"([a-z])\1{2,}", r"\1\1", normalized)
+        return normalized
 
     def _check_heuristics(self, query: str) -> QueryClassification | None:
         """Check if query can be classified by simple heuristics."""
         query_lower = query.lower().strip()
+        query_norm = self._normalize_chat_phrase(query_lower)
         words = query_lower.split()
 
         # 1. Greeting / social check
@@ -168,7 +181,7 @@ class QueryClassifier:
                 )
 
         # 4. Simple acknowledgments
-        if query_lower in {"ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no"}:
+        if query_norm in self._ACK_TOKENS:
             return QueryClassification(
                 query_type="conversational",
                 translated_query=query,

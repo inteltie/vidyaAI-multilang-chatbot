@@ -20,11 +20,12 @@ class ChatMessage(BaseModel):
 class KeyEntities(BaseModel):
     """Extracted entities from a chat session."""
     name: Optional[str] = None
+    class_level: Optional[str] = None
     topic: Optional[str] = None
     identified_gaps: Optional[str] = None
     others: Optional[Dict[str, Any]] = None
 
-    @field_validator("name", "topic", "identified_gaps", mode="before")
+    @field_validator("name", "class_level", "topic", "identified_gaps", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> Optional[str]:
         """Handle legacy list-shaped values stored in MongoDB."""

@@ -21,6 +21,8 @@ class TranslateResponseNode:
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
         start = perf_counter()
         target_lang = state.get("language", "en")
+        if state.get("language_preference_locked") and state.get("preferred_response_language"):
+            target_lang = state.get("preferred_response_language")
         if not target_lang or str(target_lang).lower() == "null":
             target_lang = "en"
         response = state.get("response", "")

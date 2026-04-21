@@ -92,6 +92,8 @@ class AgentState(TypedDict, total=False):
     user_type: Literal["student", "teacher"]
     query: str
     language: str
+    preferred_response_language: str
+    language_preference_locked: bool
     agent_mode: str
     student_grade: Literal["A", "B", "C", "D"]
     subjects: Annotated[List[str], merge_list]
@@ -101,6 +103,7 @@ class AgentState(TypedDict, total=False):
     validation_results: Optional[Dict[str, Any]]
     is_correction: bool
     clarification_message: Optional[str]
+    memory_intent: Optional[Literal["name", "class_level"]]
 
     # Session context (extracted from history + current query)
     session_metadata: Annotated[SessionMetadata, merge_metadata]
@@ -110,6 +113,7 @@ class AgentState(TypedDict, total=False):
     # Processing fields
     query_en: str
     detected_language: str
+    detected_language_confidence: float
     intent: QueryIntent
     is_context_reply: bool
     is_topic_shift: bool

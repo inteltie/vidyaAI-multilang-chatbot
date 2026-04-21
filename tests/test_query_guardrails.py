@@ -10,6 +10,9 @@ class _FakeDetector:
     def detect_language(self, _query: str) -> str:
         return "en"
 
+    def detect_language_with_confidence(self, _query: str):
+        return "en", 0.99
+
 
 class _FakeClassifier:
     def __init__(self, quality):
@@ -124,6 +127,101 @@ class QueryGuardrailsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updates["query_type"], "curriculum_specific")
         self.assertEqual(updates["query_en"], "asdf")
+
+    async def test_analyze_query_detects_memory_intent_name(self):
+        from services.query_classifier import QueryQualityAssessment
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="what is my name",
+            clarification_prompt=None,
+        )
+        node = AnalyzeQueryNode(_FakeClassifier(quality), _FakeDetector())
+        updates = await node(
+            {
+                "query": "what is my name",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+                "user_session_id": "memory-001",
+            }
+        )
+
+        self.assertEqual(updates["query_type"], "conversational")
+        self.assertEqual(updates["memory_intent"], "name")
+        self.assertEqual(updates["query_en"], "what is my name")
+
+    async def test_analyze_query_detects_memory_intent_class_level(self):
+        from services.query_classifier import QueryQualityAssessment
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="which class am i in",
+            clarification_prompt=None,
+        )
+        node = AnalyzeQueryNode(_FakeClassifier(quality), _FakeDetector())
+        updates = await node(
+            {
+                "query": "which class am i in",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+                "user_session_id": "memory-002",
+            }
+        )
+
+        self.assertEqual(updates["query_type"], "conversational")
+        self.assertEqual(updates["memory_intent"], "class_level")
+        self.assertEqual(updates["query_en"], "which class am i in")
+
+    async def test_analyze_query_locks_english_preference_from_instruction(self):
+        from services.query_classifier import QueryQualityAssessment
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="always reply in english",
+            clarification_prompt=None,
+        )
+        node = AnalyzeQueryNode(_FakeClassifier(quality), _FakeDetector())
+        updates = await node(
+            {
+                "query": "always reply in english",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+                "session_metadata": {},
+            }
+        )
+        self.assertEqual(updates["preferred_response_language"], "en")
+        self.assertTrue(updates["language_preference_locked"])
+        self.assertEqual(updates["language"], "en")
+
+    async def test_analyze_query_does_not_use_cached_followup_for_class_noun(self):
+        from services.query_classifier import QueryQualityAssessment
+        from unittest.mock import AsyncMock
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="class?",
+            clarification_prompt=None,
+        )
+        fake_classifier = _FakeClassifier(quality)
+        node = AnalyzeQueryNode(fake_classifier, _FakeDetector())
+
+        with patch("services.cache_service.CacheService.get", new=AsyncMock(return_value="photosynthesis basics")):
+            updates = await node(
+                {
+                    "query": "class?",
+                    "conversation_history": [],
+                    "context_gathering_attempts": 0,
+                    "user_session_id": "memory-003",
+                }
+            )
+
+        self.assertEqual(updates["query_type"], "curriculum_specific")
+        self.assertEqual(updates["query_en"], "class?")
+        self.assertNotIn("Follow-up", updates["query_en"])
 
     async def test_low_rag_keeps_reactive_web_fallback_with_reason(self):
         node = RetrieveDocumentsNode(_FakeRetriever([]))

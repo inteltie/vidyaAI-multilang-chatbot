@@ -1,6 +1,7 @@
 """Conversational agent for handling acknowledgments and social interactions."""
 
 import logging
+import re
 from collections.abc import Mapping
 from langchain_openai import ChatOpenAI
 from state import AgentState
@@ -14,15 +15,134 @@ class ConversationalAgent:
     
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
+
+    @staticmethod
+    def _extract_known_name(session_metadata: dict, history) -> str | None:
+        structured = (session_metadata or {}).get("structured_summary")
+        entities = {}
+        if structured:
+            if isinstance(structured, Mapping):
+                entities = dict(structured.get("key_entities") or {})
+            elif hasattr(structured, "key_entities"):
+                key_entities = getattr(structured, "key_entities")
+                entities = key_entities.model_dump() if hasattr(key_entities, "model_dump") else (key_entities or {})
+
+        name = entities.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+
+        # Fallback extraction from recent user messages.
+        for msg in reversed(history or []):
+            role = getattr(msg, "type", None)
+            content = getattr(msg, "content", "")
+            if role != "human":
+                continue
+            match = re.search(r"\b(?:i am|i'm|my name is)\s+([a-zA-Z][a-zA-Z\s]{1,30})", str(content), re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip().split(",")[0].strip()
+                if candidate:
+                    return candidate.title()
+        return None
+
+    @staticmethod
+    def _extract_known_class_level(session_metadata: dict, history) -> str | None:
+        structured = (session_metadata or {}).get("structured_summary")
+        entities = {}
+        if structured:
+            if isinstance(structured, Mapping):
+                entities = dict(structured.get("key_entities") or {})
+            elif hasattr(structured, "key_entities"):
+                key_entities = getattr(structured, "key_entities")
+                entities = key_entities.model_dump() if hasattr(key_entities, "model_dump") else (key_entities or {})
+
+        for key in ("class_level",):
+            value = entities.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        # Fallback to topic text and recent user history.
+        topic_blob = entities.get("topic")
+        if isinstance(topic_blob, str):
+            match = re.search(r"\bclass\s*(\d{1,2})\b", topic_blob.lower())
+            if match:
+                return f"Class {match.group(1)}"
+
+        for msg in reversed(history or []):
+            role = getattr(msg, "type", None)
+            content = str(getattr(msg, "content", ""))
+            if role != "human":
+                continue
+            match = re.search(r"\bclass\s*(\d{1,2})\b", content.lower())
+            if match:
+                return f"Class {match.group(1)}"
+        return None
+
+    @staticmethod
+    def _normalize_chat_token(text: str) -> str:
+        cleaned = re.sub(r"[^\w\s]", " ", (text or "").lower()).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        cleaned = re.sub(r"([a-z])\1{2,}", r"\1\1", cleaned)
+        return cleaned
+
+    @classmethod
+    def _is_acknowledgment_only(cls, text: str) -> bool:
+        normalized = cls._normalize_chat_token(text)
+        if not normalized:
+            return False
+        if "?" in (text or ""):
+            return False
+        ack_tokens = {
+            "ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no",
+            "cool", "nice", "great", "got it", "understood", "hmm", "hm", "ohk",
+            "thx", "thanks", "thank you",
+        }
+        return normalized in ack_tokens
     
     async def __call__(self, state: AgentState) -> dict:
         """Generate friendly conversational response."""
-        query = state["query"].lower()
+        raw_query = state["query"]
+        query = raw_query.lower()
 
         # Deterministic clarification path from AnalyzeQueryNode
         if state.get("needs_context") and state.get("clarification_message"):
             return {
                 "response": state["clarification_message"],
+                "llm_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+
+        memory_intent = state.get("memory_intent")
+        if memory_intent in {"name", "class_level"}:
+            history = state.get("conversation_history", [])
+            session_metadata = state.get("session_metadata", {})
+
+            if memory_intent == "name":
+                known_name = self._extract_known_name(session_metadata, history)
+                if known_name:
+                    return {
+                        "response": f"Your name is {known_name}.",
+                        "llm_calls": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                    }
+                return {
+                    "response": "I do not have your name in this chat yet. Please tell me your name once, and I will remember it for this session.",
+                    "llm_calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
+
+            known_class = self._extract_known_class_level(session_metadata, history)
+            if known_class:
+                return {
+                    "response": f"You mentioned you are in {known_class}.",
+                    "llm_calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
+            return {
+                "response": "I do not have your class level in this chat yet. Please tell me your class, for example 'I am in class 10'.",
                 "llm_calls": 0,
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -38,9 +158,14 @@ class ConversationalAgent:
             "input_tokens": 0,
             "output_tokens": 0
         }
+        target_lang = state.get("language", "en")
+        if state.get("language_preference_locked") and state.get("preferred_response_language"):
+            target_lang = state.get("preferred_response_language")
         
         # Template-based responses for common cases
-        if any(word in query for word in ["thanks", "thank you", "thx"]):
+        if self._is_acknowledgment_only(raw_query):
+            updates["response"] = f"{prefix}Got it. I am here whenever you need help."
+        elif any(word in query for word in ["thanks", "thank you", "thx"]):
             updates["response"] = f"{prefix}I'm glad I could help! Feel free to ask if you have more questions."
         elif any(word in query for word in ["bye", "goodbye", "see you"]):
             updates["response"] = f"{prefix}Goodbye! Happy learning! 📚"
@@ -75,8 +200,10 @@ class ConversationalAgent:
             recent_history = history[-4:]
             history_text = ""
             for m in recent_history: 
-                role = "STUDENT" if m.type == "human" else "VIDYA"
-                history_text += f"{role}: {m.content}\n"
+                msg_type = getattr(m, "type", "")
+                msg_content = getattr(m, "content", "")
+                role = "STUDENT" if msg_type == "human" else "VIDYA"
+                history_text += f"{role}: {msg_content}\n"
             
             # Log history tokens
             try:
@@ -86,8 +213,6 @@ class ConversationalAgent:
                 logger.debug("Failed to calculate history tokens: %s", e)
 
             has_history = len(history) > 0
-            target_lang = state.get("language", "en")
-            
             # Different prompts for fresh vs mid-conversation greetings
             if not has_history:
                 # Fresh conversation - simple welcome
@@ -131,7 +256,10 @@ class ConversationalAgent:
                     f"- Use emojis (👋, 📚).\n"
                     f"- NEVER say generic 'I see you are greeting me'.\n"
                     f"- Keep it brief and inviting (<60 tokens).")
-            resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
+            max_tokens = settings.main_response_tokens
+            if len(self._normalize_chat_token(raw_query).split()) <= 3:
+                max_tokens = min(max_tokens, 120)
+            resp = await self._llm.ainvoke(prompt, config={"max_tokens": max_tokens})
             updates["response"] = resp.content.strip()
             
             # Log token usage
