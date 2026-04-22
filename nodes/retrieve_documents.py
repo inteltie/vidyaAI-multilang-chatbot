@@ -48,8 +48,14 @@ class RetrieveDocumentsNode:
         from models import QueryIntent
         intent = state.get("intent", QueryIntent.CONCEPT_EXPLANATION)
 
-        # Proactive Web Search trigger: If keywords detected, we start it PARALLEL with RAG
-        needs_web_proactive = any(w in query_raw.lower() for w in ["latest", "recent", "news", "current"])
+        # Proactive Web Search trigger: If recency/current-affairs cues are detected.
+        recency_terms = [
+            "latest", "recent", "news", "current", "today", "now", "currently",
+            "this week", "this month", "this year", "breaking", "update", "updates",
+            "current affairs", "right now", "live", "headline", "headlines",
+        ]
+        query_raw_lower = query_raw.lower()
+        needs_web_proactive = any(term in query_raw_lower for term in recency_terms)
         
         # Speculative RAG reuse logic
         speculative_docs = state.get("documents")

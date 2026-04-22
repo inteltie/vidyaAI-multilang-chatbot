@@ -2,10 +2,12 @@
 
 import logging
 import re
+from datetime import datetime, timezone
 from collections.abc import Mapping
 from langchain_openai import ChatOpenAI
 from state import AgentState
 from config import settings
+from tools.web_search_tool import WebSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +95,50 @@ class ConversationalAgent:
             return False
         ack_tokens = {
             "ok", "okay", "alright", "sure", "fine", "k", "yep", "yes", "no",
-            "cool", "nice", "great", "got it", "understood", "hmm", "hm", "ohk",
+            "cool", "nice", "great", "got it", "understood", "hmm", "hm", "ohk", "ohkk",
             "thx", "thanks", "thank you",
         }
         return normalized in ack_tokens
+
+    @staticmethod
+    def _looks_like_greeting(text: str) -> bool:
+        normalized = ConversationalAgent._normalize_chat_token(text)
+        greeting_tokens = {
+            "hi", "hello", "hey", "hii", "heyy", "good morning",
+            "good evening", "good afternoon", "namaste",
+        }
+        return normalized in greeting_tokens
+
+    @staticmethod
+    def _looks_like_thanks(text: str) -> bool:
+        q = (text or "").lower()
+        return any(word in q for word in ["thanks", "thank you", "thx"])
+
+    @staticmethod
+    def _looks_like_goodbye(text: str) -> bool:
+        q = (text or "").lower()
+        return any(word in q for word in ["bye", "goodbye", "see you"])
+
+    @staticmethod
+    def _looks_like_completion(text: str) -> bool:
+        q = (text or "").lower()
+        return any(phrase in q for phrase in ["solved", "clear now", "got it", "understood"])
+
+    @classmethod
+    def _is_informational_conversational(cls, text: str) -> bool:
+        if cls._looks_like_greeting(text):
+            return False
+        if cls._is_acknowledgment_only(text):
+            return False
+        if cls._looks_like_thanks(text):
+            return False
+        if cls._looks_like_goodbye(text):
+            return False
+        if cls._looks_like_completion(text):
+            return False
+        tokens = cls._normalize_chat_token(text).split()
+        filtered_tokens = [tok for tok in tokens if re.search(r"[a-zA-Z0-9]", tok)]
+        return len(tokens) >= 4 or ("?" in (text or "") and len(filtered_tokens) >= 1)
     
     async def __call__(self, state: AgentState) -> dict:
         """Generate friendly conversational response."""
@@ -107,6 +149,13 @@ class ConversationalAgent:
         if state.get("needs_context") and state.get("clarification_message"):
             return {
                 "response": state["clarification_message"],
+                "llm_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+        if state.get("response"):
+            return {
+                "response": state["response"],
                 "llm_calls": 0,
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -162,126 +211,60 @@ class ConversationalAgent:
         if state.get("language_preference_locked") and state.get("preferred_response_language"):
             target_lang = state.get("preferred_response_language")
         
-        # Template-based responses for common cases
-        if self._is_acknowledgment_only(raw_query):
-            updates["response"] = f"{prefix}Got it. I am here whenever you need help."
-        elif any(word in query for word in ["thanks", "thank you", "thx"]):
-            updates["response"] = f"{prefix}I'm glad I could help! Feel free to ask if you have more questions."
-        elif any(word in query for word in ["bye", "goodbye", "see you"]):
-            updates["response"] = f"{prefix}Goodbye! Happy learning! 📚"
-        elif any(phrase in query for phrase in ["solved", "clear now", "got it", "understood"]):
-            updates["response"] = f"{prefix}Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
-        else:
-            # Use LLM with history and summary for personalized responses
-            history = state.get("conversation_history", [])
-            session_metadata = state.get("session_metadata", {})
-            summary = session_metadata.get("summary", "")
-            structured_summary = session_metadata.get("structured_summary")
-            structured_summary_data = {}
-            if structured_summary:
-                if isinstance(structured_summary, Mapping):
-                    structured_summary_data = dict(structured_summary)
-                elif hasattr(structured_summary, "model_dump"):
-                    structured_summary_data = structured_summary.model_dump()
-                else:
-                    structured_summary_data = {
-                        "key_entities": getattr(structured_summary, "key_entities", {}),
-                    }
-
-            key_entities = structured_summary_data.get("key_entities") or {}
-            if hasattr(key_entities, "model_dump"):
-                key_entities = key_entities.model_dump()
-            elif not isinstance(key_entities, Mapping):
-                key_entities = {}
-
-            topic = key_entities.get("topic", "your studies")
-            
-            # Aggressive Truncation: Keep only last 4 messages for conversational context
-            recent_history = history[-4:]
-            history_text = ""
-            for m in recent_history: 
-                msg_type = getattr(m, "type", "")
-                msg_content = getattr(m, "content", "")
-                role = "STUDENT" if msg_type == "human" else "VIDYA"
-                history_text += f"{role}: {msg_content}\n"
-            
-            # Log history tokens
-            try:
-                history_tokens = self._llm.get_num_tokens_from_messages(recent_history)
-                logger.info("[TOKEN_USAGE] Context: chat_history_tokens=%d", history_tokens)
-            except Exception as e:
-                logger.debug("Failed to calculate history tokens: %s", e)
-
-            has_history = len(history) > 0
-            # Different prompts for fresh vs mid-conversation greetings
-            if not has_history:
-                # Fresh conversation - simple welcome
-                prompt = (
-                    f"You are Vidya, a friendly educational assistant. "
-                    f"The user just greeted you for the first time. "
-                    f"Respond in **{target_lang}** with a warm, brief welcome.\n\n"
-                    f"User Greeting: {state['query']}\n\n"
-                    f"Rules:\n"
-                    f"- Be warm and welcoming. Use emojis (👋, 📚).\n"
-                    f"- Introduce yourself briefly as Vidya, their learning companion.\n"
-                    f"- Ask how you can help them today.\n"
-                    f"- Keep it brief and inviting (<60 tokens).\n"
-                    f"- DO NOT mention any previous topics or discussions.")
+        # Template-based responses for common social cases with strict cadence.
+        if self._looks_like_greeting(raw_query):
+            if is_restart:
+                updates["response"] = f"{prefix}How can I help you today?"
             else:
-                # Format memory context from structured summary
-                memory_context = ""
-                if structured_summary_data:
-                    memory_context = (
-                        f"Student Name: {key_entities.get('name', 'User')}\n"
-                        f"Current Topic: {key_entities.get('topic', 'Not set')}\n"
-                        f"Identified Gaps: {key_entities.get('identified_gaps', 'None')}\n"
-                    )
-                elif summary:
-                    memory_context = f"Overview: {summary}\n"
-
-                # Mid-conversation greeting - reconnect pattern
-                prompt = (
-                    f"You are Vidya, a friendly educational assistant. "
-                    f"The user is greeting you mid-conversation. "
-                    f"Respond in **{target_lang}** using a natural reconnect pattern:\n\n"
-                    f"1. Greet the user warmly.\n"
-                    f"2. Optionally, acknowledge they are returning to the conversation, OR briefly mention the ongoing topic if relevant.\n"
-                    f"3. Ask how you can help them right now, or if they want to continue.\n\n"
-                    f"Memory Context:\n{memory_context}\n"
-                    f"Recent History Snippet:\n{history_text}\n"
-                    f"User Greeting: {state['query']}\n\n"
-                    f"Rules:\n"
-                    f"- IMPORTANT: Vary your phrasing! DO NOT always say 'We were just discussing...'. "
-                    f"Be natural. (e.g., 'Welcome back!', 'Hi again! Still working on {topic if structured_summary_data else 'your topics'}?').\n"
-                    f"- Use emojis (👋, 📚).\n"
-                    f"- NEVER say generic 'I see you are greeting me'.\n"
-                    f"- Keep it brief and inviting (<60 tokens).")
-            max_tokens = settings.main_response_tokens
-            if len(self._normalize_chat_token(raw_query).split()) <= 3:
-                max_tokens = min(max_tokens, 120)
+                updates["response"] = "How can I help you with your question today?"
+        elif self._is_acknowledgment_only(raw_query):
+            updates["response"] = f"{prefix}Got it. I am here whenever you need help."
+        elif self._looks_like_thanks(raw_query):
+            updates["response"] = f"{prefix}I'm glad I could help! Feel free to ask if you have more questions."
+        elif self._looks_like_goodbye(raw_query):
+            updates["response"] = f"{prefix}Goodbye! Happy learning! 📚"
+        elif self._looks_like_completion(raw_query):
+            updates["response"] = f"{prefix}Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
+        elif self._is_informational_conversational(raw_query):
+            # Conversational informational path: web-backed + date-grounded.
+            today_iso = datetime.now(timezone.utc).date().isoformat()
+            web_tool = WebSearchTool()
+            try:
+                web_observation, web_i_tokens, web_o_tokens = await web_tool.execute(query=raw_query)
+            except Exception as exc:
+                logger.error(
+                    "WebSearchTool failed for raw_query=%r with error=%s",
+                    raw_query,
+                    exc,
+                )
+                web_observation, web_i_tokens, web_o_tokens = "", 0, 0
+            prompt = (
+                f"You are Vidya, a friendly educational assistant. "
+                f"Today is {today_iso} (UTC). "
+                f"Answer the user's informational question concisely and clearly in {target_lang}. "
+                f"Use the web observation when relevant, and if information may change quickly, mention the date context briefly.\n\n"
+                f"User query: {raw_query}\n\n"
+                f"Web observation:\n{web_observation}\n\n"
+                "Rules:\n"
+                "- Do not add a greeting.\n"
+                "- Keep response practical and easy to understand.\n"
+                "- Keep answer under 120 words unless user explicitly asks for detail.\n"
+            )
+            max_tokens = min(settings.main_response_tokens, 180)
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": max_tokens})
             updates["response"] = resp.content.strip()
-            
-            # Log token usage
             usage = getattr(resp, "usage_metadata", None) or getattr(resp, "response_metadata", {}).get("token_usage", {})
-            if usage:
-                i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-                o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
-                updates["input_tokens"] = i_tokens
-                updates["output_tokens"] = o_tokens
-                
-                # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
-                updates["primary_input_tokens"] = i_tokens
-                updates["primary_output_tokens"] = o_tokens
-                logger.info(
-                    "[TOKEN_USAGE] ConversationalAgent: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
-                    i_tokens,
-                    o_tokens,
-                    usage.get("total_tokens"),
-                    self._llm.model_name
-                )
-            
+            i_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+            o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+            updates["input_tokens"] = i_tokens + web_i_tokens
+            updates["output_tokens"] = o_tokens + web_o_tokens
+            updates["primary_input_tokens"] = i_tokens
+            updates["primary_output_tokens"] = o_tokens
+            updates["aux_input_tokens"] = web_i_tokens
+            updates["aux_output_tokens"] = web_o_tokens
             updates["llm_calls"] = 1
+        else:
+            updates["response"] = "Please share your question in one line, and I will help."
         
         logger.info("Conversational agent handled query%s", " (session restart)" if is_restart else "")
         return updates

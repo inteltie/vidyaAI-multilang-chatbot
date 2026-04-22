@@ -104,6 +104,8 @@ class AgentState(TypedDict, total=False):
     is_correction: bool
     clarification_message: Optional[str]
     memory_intent: Optional[Literal["name", "class_level"]]
+    is_time_sensitive_query: bool
+    is_current_affairs_query: bool
 
     # Session context (extracted from history + current query)
     session_metadata: Annotated[SessionMetadata, merge_metadata]

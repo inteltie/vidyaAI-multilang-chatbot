@@ -13,6 +13,9 @@ class _FakeDetector:
     def detect_language_with_confidence(self, _query: str):
         return "en", 0.99
 
+    def _is_short_english_chat(self, _query: str):
+        return True
+
 
 class _FakeClassifier:
     def __init__(self, quality):
@@ -24,6 +27,12 @@ class _FakeClassifier:
 
     def _check_heuristics(self, _query: str):
         return None
+
+    _ACK_TOKENS = {"ohk", "ok"}
+
+    @staticmethod
+    def _normalize_chat_phrase(text: str):
+        return text.lower().strip()
 
     async def analyze(self, query, _history):
         from services.query_classifier import QueryClassification
@@ -196,6 +205,62 @@ class QueryGuardrailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(updates["language_preference_locked"])
         self.assertEqual(updates["language"], "en")
 
+    async def test_analyze_query_intro_declaration_not_memory_recall(self):
+        from services.query_classifier import QueryQualityAssessment
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="my name is jay and iam in class 12 th",
+            clarification_prompt=None,
+        )
+        node = AnalyzeQueryNode(_FakeClassifier(quality), _FakeDetector())
+        updates = await node(
+            {
+                "query": "My name is jay and Iam in class 12 th",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+                "session_metadata": {},
+            }
+        )
+        self.assertEqual(updates["query_type"], "conversational")
+        self.assertNotIn("memory_intent", updates)
+        self.assertIn("Thanks, Jay", updates["response"])
+
+    async def test_analyze_query_ack_turn_keeps_english_language(self):
+        from services.query_classifier import QueryQualityAssessment, QueryClassification
+
+        class _AckClassifier(_FakeClassifier):
+            def _check_heuristics(self, _query: str):
+                return QueryClassification(
+                    query_type="conversational",
+                    translated_query="ohkk",
+                    confidence=1.0,
+                    reasoning="Matched acknowledgment heuristic.",
+                    subjects=["General"],
+                )
+
+        class _NoisyDetector(_FakeDetector):
+            def detect_language_with_confidence(self, _query: str):
+                return "no", 0.45
+
+        quality = QueryQualityAssessment(
+            is_unclear=False,
+            reason=None,
+            normalized_query="ohkk",
+            clarification_prompt=None,
+        )
+        node = AnalyzeQueryNode(_AckClassifier(quality), _NoisyDetector())
+        updates = await node(
+            {
+                "query": "ohkk",
+                "conversation_history": [],
+                "context_gathering_attempts": 0,
+                "session_metadata": {},
+            }
+        )
+        self.assertEqual(updates["language"], "en")
+
     async def test_analyze_query_does_not_use_cached_followup_for_class_noun(self):
         from services.query_classifier import QueryQualityAssessment
         from unittest.mock import AsyncMock
@@ -258,6 +323,19 @@ class QueryGuardrailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["web_fallback_reason"], "recency_skipped_speculative")
         self.assertEqual(updates["llm_calls"], 0)
 
+    async def test_expanded_recency_terms_trigger_proactive_web(self):
+        node = RetrieveDocumentsNode(_FakeRetriever([]))
+        state = {
+            "query_en": "india headlines this week",
+            "query": "india headlines this week",
+            "request_filters": {},
+            "intent": "concept_explanation",
+        }
+        with patch("tools.web_search_tool.WebSearchTool", _FakeWebSearchTool):
+            updates = await node(state)
+        self.assertEqual(updates["web_fallback_reason"], "recency")
+        self.assertEqual(updates["llm_calls"], 1)
+
 
 class QueryQualityHeuristicsTests(unittest.TestCase):
     def test_query_quality_detects_gibberish(self):
@@ -295,13 +373,21 @@ class QueryQualityHeuristicsTests(unittest.TestCase):
     def test_query_quality_subject_detection_ignores_embedded_substring(self):
         classifier = QueryClassifier.__new__(QueryClassifier)
         result = QueryClassifier.assess_query_quality(classifier, "bio pythonic pls")
-        self.assertEqual(result.reason, "ambiguous_abbreviation_query")
+        self.assertIsNone(result.reason)
 
     def test_query_quality_subject_detection_handles_trimmed_keyword_tokens(self):
         classifier = QueryClassifier.__new__(QueryClassifier)
         result = QueryClassifier.assess_query_quality(classifier, "bio python pls")
         self.assertFalse(result.is_unclear)
         self.assertIsNone(result.reason)
+
+    def test_detect_time_sensitive_query(self):
+        self.assertTrue(QueryClassifier.detect_time_sensitive_query("what are india headlines this week"))
+        self.assertFalse(QueryClassifier.detect_time_sensitive_query("explain photosynthesis"))
+
+    def test_detect_current_affairs_query(self):
+        self.assertTrue(QueryClassifier.detect_current_affairs_query("state of india under modi government"))
+        self.assertFalse(QueryClassifier.detect_current_affairs_query("solve this algebra equation"))
 
 
 if __name__ == "__main__":

@@ -40,7 +40,6 @@ class AnalyzeQueryNode:
             r"\bwhat is my name\b",
             r"\bwhats my name\b",
             r"\bwho am i\b",
-            r"\bmy name\b",
         )
         class_patterns = (
             r"\bwhat is my class\b",
@@ -48,13 +47,53 @@ class AnalyzeQueryNode:
             r"\bwhich class am i in\b",
             r"\bwhat class am i in\b",
             r"\bi am in which class\b",
-            r"\bmy class\b",
         )
 
         if any(re.search(pat, q) for pat in name_patterns):
             return "name"
         if any(re.search(pat, q) for pat in class_patterns):
             return "class_level"
+        return None
+
+    @staticmethod
+    def _extract_intro_entities(query: str) -> dict[str, str]:
+        """Extract user-provided name/class from a self-introduction message."""
+        text = (query or "").strip()
+        if not text:
+            return {}
+        normalized = re.sub(r"\s+", " ", text)
+        lowered = normalized.lower()
+
+        entities: dict[str, str] = {}
+        name_match = re.search(
+            r"\b(?:my name is|i am|i'm)\s+([a-zA-Z][a-zA-Z]{1,29})\b",
+            lowered,
+        )
+        if name_match:
+            candidate = name_match.group(1).strip()
+            if candidate not in {"in", "from", "class"}:
+                entities["name"] = candidate.title()
+
+        class_match = re.search(
+            r"\bclass\s*(\d{1,2})(?:\s*(?:th|st|nd|rd))?\b",
+            lowered,
+        )
+        if class_match:
+            entities["class_level"] = f"Class {class_match.group(1)}"
+
+        return entities
+
+    @staticmethod
+    def _build_intro_acknowledgement(intro_entities: dict[str, str]) -> str | None:
+        """Create deterministic acknowledgement for user-provided profile details."""
+        name = intro_entities.get("name")
+        class_level = intro_entities.get("class_level")
+        if name and class_level:
+            return f"Thanks, {name}. Noted that you are in {class_level}. Please share your specific doubt and I will help."
+        if name:
+            return f"Thanks, {name}. I have noted your name. Please share your specific doubt and I will help."
+        if class_level:
+            return f"Noted that you are in {class_level}. Please share your specific doubt and I will help."
         return None
 
     @staticmethod
@@ -112,6 +151,26 @@ class AnalyzeQueryNode:
         history = state.get("conversation_history", [])
         user_session_id = state.get("user_session_id")
         clarification_attempts = int(state.get("context_gathering_attempts", 0) or 0)
+        warn_logger = getattr(getattr(self, "_logger", None), "warning", logger.warning)
+        detect_time_sensitive = getattr(self._classifier, "detect_time_sensitive_query", None)
+        detect_current_affairs = getattr(self._classifier, "detect_current_affairs_query", None)
+        if callable(detect_time_sensitive):
+            try:
+                is_time_sensitive_query = bool(detect_time_sensitive(query))
+            except Exception as exc:
+                warn_logger("detect_time_sensitive_query failed for query=%r: %s", query, exc)
+                is_time_sensitive_query = False
+        else:
+            is_time_sensitive_query = False
+
+        if callable(detect_current_affairs):
+            try:
+                is_current_affairs_query = bool(detect_current_affairs(query))
+            except Exception as exc:
+                warn_logger("detect_current_affairs_query failed for query=%r: %s", query, exc)
+                is_current_affairs_query = False
+        else:
+            is_current_affairs_query = False
         
         # Phase 5: Query Summarization for large inputs
         final_query = query
@@ -169,6 +228,8 @@ class AnalyzeQueryNode:
                     "detected_language": self._detector.detect_language(query),
                     "language": self._detector.detect_language(query),
                     "timings": {"analyze_query": perf_counter() - start},
+                    "is_time_sensitive_query": is_time_sensitive_query,
+                    "is_current_affairs_query": is_current_affairs_query,
                 })
                 logger.info("Unclear query detected (%s). Asking one clarification.", quality.reason)
                 return updates
@@ -182,12 +243,25 @@ class AnalyzeQueryNode:
             effective_query = quality.normalized_query or final_query
             query_norm = effective_query.lower().strip()
             memory_intent = self._detect_memory_intent(effective_query)
+            intro_entities = self._extract_intro_entities(effective_query)
+            intro_ack = self._build_intro_acknowledgement(intro_entities)
             if memory_intent:
                 updates["memory_intent"] = memory_intent
+            if intro_entities:
+                updates["captured_intro_entities"] = intro_entities
             
             if heuristic_result:
                 result = heuristic_result
                 logger.info(f"DEBUG: analyze_query set result to heuristic: {result.query_type}")
+            elif intro_ack:
+                result = QueryClassification(
+                    query_type="conversational",
+                    translated_query=effective_query,
+                    confidence=1.0,
+                    reasoning="Matched self-introduction heuristic.",
+                    subjects=["General"],
+                )
+                updates["response"] = intro_ack
             elif memory_intent:
                 result = QueryClassification(
                     query_type="conversational",
@@ -236,14 +310,22 @@ class AnalyzeQueryNode:
             )
         
         # Prepare updates
+        normalized_chat = self._classifier._normalize_chat_phrase(query)
+        normalized_chat_compact = re.sub(r"([a-z])\1{2,}", r"\1\1", normalized_chat)
+        ack_tokens = set(getattr(self._classifier, "_ACK_TOKENS", set()) or set())
+        is_acknowledgment_turn = bool(
+            result.query_type == "conversational"
+            and (
+                normalized_chat in ack_tokens
+                or normalized_chat_compact in ack_tokens
+                or "acknowledgment" in (result.reasoning or "").lower()
+            )
+        )
         updates.update({
             "query_en": result.translated_query,
             "query_type": result.query_type,
             "subjects": result.subjects,
-            "is_acknowledgment": bool(
-                result.query_type == "conversational"
-                and self._classifier._normalize_chat_phrase(query) in self._classifier._ACK_TOKENS
-            ),
+            "is_acknowledgment": is_acknowledgment_turn,
             "llm_calls": 0 if (
                 result.reasoning.startswith("Used cached resolved query") or
                 result.reasoning.startswith("Cached result")
@@ -252,6 +334,8 @@ class AnalyzeQueryNode:
             "output_tokens": updates["output_tokens"] + result.output_tokens,
             "aux_input_tokens": updates.get("aux_input_tokens", 0) + result.input_tokens,
             "aux_output_tokens": updates.get("aux_output_tokens", 0) + result.output_tokens,
+            "is_time_sensitive_query": is_time_sensitive_query,
+            "is_current_affairs_query": is_current_affairs_query,
         })
         
         
@@ -277,6 +361,12 @@ class AnalyzeQueryNode:
         # Resolve target language with explicit precedence:
         # explicit/locked preference > memory preference > detected language.
         effective_language = preferred_response_language if language_preference_locked else detected_lang
+        if (
+            not language_preference_locked
+            and updates.get("is_acknowledgment")
+            and self._detector._is_short_english_chat(query)
+        ):
+            effective_language = "en"
         if not effective_language or str(effective_language).lower() == "null":
             effective_language = "en"
         updates["preferred_response_language"] = preferred_response_language
@@ -301,6 +391,19 @@ class AnalyzeQueryNode:
                 new_meta["lecture_id"] = result.lecture_id
             
             updates["session_metadata"] = new_meta
+        elif updates.get("captured_intro_entities"):
+            current_meta = state.get("session_metadata", {})
+            new_meta = current_meta.copy()
+            structured = dict(new_meta.get("structured_summary") or {})
+            key_entities = dict(structured.get("key_entities") or {})
+            if not key_entities.get("name") and updates["captured_intro_entities"].get("name"):
+                key_entities["name"] = updates["captured_intro_entities"]["name"]
+            if not key_entities.get("class_level") and updates["captured_intro_entities"].get("class_level"):
+                key_entities["class_level"] = updates["captured_intro_entities"]["class_level"]
+            if key_entities:
+                structured["key_entities"] = key_entities
+                new_meta["structured_summary"] = structured
+                updates["session_metadata"] = new_meta
             
             # -- SPECULATIVE RAG --
             # Trigger retrieval early if we have a translated query and subjects

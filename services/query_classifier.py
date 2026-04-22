@@ -124,6 +124,16 @@ class QueryClassifier:
         "cool", "nice", "great", "hmm", "hm", "ohk", "got it", "understood",
         "thx", "thanks", "thank you",
     }
+    _TIME_SENSITIVE_TERMS = {
+        "latest", "recent", "news", "current", "today", "now", "currently",
+        "this week", "this month", "this year", "breaking", "update", "updates",
+        "current affairs", "headline", "headlines", "live", "right now",
+    }
+    _CURRENT_AFFAIRS_TERMS = {
+        "government", "govt", "prime minister", "pm", "modi", "india",
+        "parliament", "election", "policy", "policies", "budget", "geopolitics",
+        "economy", "current affairs", "international relations", "cabinet",
+    }
 
     @staticmethod
     def _normalize_chat_phrase(text: str) -> str:
@@ -191,6 +201,16 @@ class QueryClassifier:
             )
 
         return None
+
+    @classmethod
+    def detect_time_sensitive_query(cls, query: str) -> bool:
+        query_norm = cls._normalize_chat_phrase(query)
+        return any(term in query_norm for term in cls._TIME_SENSITIVE_TERMS)
+
+    @classmethod
+    def detect_current_affairs_query(cls, query: str) -> bool:
+        query_norm = cls._normalize_chat_phrase(query)
+        return any(term in query_norm for term in cls._CURRENT_AFFAIRS_TERMS)
         
     def _format_history(self, history: List[Union[ConversationTurn, BaseMessage]], limit: int = 4) -> str:
         """Format history into role: content text, handling both dicts and objects."""
