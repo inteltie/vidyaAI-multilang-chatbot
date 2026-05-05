@@ -3,7 +3,7 @@
 import json
 import logging
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
@@ -37,6 +37,10 @@ class ReActAgent:
         self.tool_registry = tool_registry
         self.max_iterations = max_iterations or (settings.max_iterations if settings else 5)
         self.enforce_sequential = kwargs.get("enforce_sequential", False)
+        # When True, _build_messages keeps a longer history slice (8 vs 4) even
+        # if a session summary is available. Cross-questioning needs the prior
+        # Socratic question and the student's latest reply to remain in context.
+        self._is_interactive = bool(kwargs.get("is_interactive", False))
         
         # Convert custom tools to LangChain tools
         self.tools = []
@@ -95,9 +99,15 @@ class ReActAgent:
         session_metadata: Optional[Dict[str, Any]] = None,
         request_filters: Optional[Dict[str, Any]] = None,
         prefilled_observations: Optional[List[Dict[str, Any]]] = None, # NEW
+        system_prompt_builder: Optional[Callable[[str, Optional[Dict[str, Any]]], str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent loop to answer the query.
+
+        system_prompt_builder: Per-invocation system prompt override. Use this
+        instead of mutating ``self.build_system_prompt`` when the same
+        ReActAgent instance may serve concurrent requests (builds a prompt from
+        ``query`` and ``session_metadata``).
         """
         # Calculate history tokens before modifying messages
         try:
@@ -106,7 +116,9 @@ class ReActAgent:
         except Exception as e:
             logger.debug("Failed to calculate history tokens: %s", e)
 
-        messages = self._build_messages(query, messages, summary, session_metadata)
+        messages = self._build_messages(
+            query, messages, summary, session_metadata, system_prompt_builder
+        )
         scratchpad: List[Dict[str, str]] = []
         
         total_input_tokens = 0
@@ -332,7 +344,8 @@ class ReActAgent:
         query: str, 
         history: List[BaseMessage],
         summary: Optional[str] = None,
-        session_metadata: Optional[Dict[str, Any]] = None
+        session_metadata: Optional[Dict[str, Any]] = None,
+        system_prompt_builder: Optional[Callable[[str, Optional[Dict[str, Any]]], str]] = None,
     ) -> List[Any]:
         """Build the initial message list incorporating summary and trimmed history."""
         messages = []
@@ -402,8 +415,12 @@ class ReActAgent:
         if context_items:
             context_str = "\nCONTEXT:\n" + "\n".join(context_items)
         
-        if hasattr(self, "build_system_prompt"):
-            system_prompt = self.build_system_prompt(query, session_metadata) + summary_section
+        builder = system_prompt_builder
+        if builder is None and hasattr(self, "build_system_prompt"):
+            builder = self.build_system_prompt
+
+        if builder is not None:
+            system_prompt = builder(query, session_metadata) + summary_section
         else:
             system_prompt = (
                 "You are an educational AI. Answer using retrieved docs.\n"
@@ -423,9 +440,16 @@ class ReActAgent:
         # 2. History (Aggressive Local Truncation)
         # If we have a summary, we only need the last few messages for immediate context/flow.
         # Otherwise, use the full provided history (which is already limited by MemoryService).
-        if (summary or structured_summary) and len(history) > 4:
-            logger.info("Applying aggressive local truncation: keeping last 4 messages due to summary availability.")
-            messages.extend(history[-4:])
+        # Interactive (Socratic) mode keeps a wider window so the prior question
+        # and the student's latest answer are always in context for cross-questioning.
+        keep = 8 if getattr(self, "_is_interactive", False) else 4
+        if (summary or structured_summary) and len(history) > keep:
+            logger.info(
+                "Applying local truncation: keeping last %d messages due to summary availability (interactive=%s).",
+                keep,
+                getattr(self, "_is_interactive", False),
+            )
+            messages.extend(history[-keep:])
         else:
             messages.extend(history)
                 

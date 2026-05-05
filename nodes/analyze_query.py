@@ -27,6 +27,70 @@ class AnalyzeQueryNode:
         self._detector = detector
         self._retriever = retriever
 
+    # Pure greetings that should NEVER be reclassified as interactive follow-ups,
+    # even mid-Socratic flow. Acknowledgments like "yes/ok/idk/hmm" are NOT here
+    # so they continue to flow into the interactive agent.
+    _PURE_GREETING_TOKENS = {
+        "hi", "helo", "hey", "hello", "namaste", "नमस्ते", "हेलो",
+        "bye", "goodbye", "godbye",
+    }
+
+    @classmethod
+    def _is_interactive_followup(cls, state: dict, query: str) -> bool:
+        """
+        True when the user is mid-Socratic-loop in interactive mode and their
+        current message is a short reply (acknowledgment / confusion / follow-up)
+        to a question Vidya just posed.
+
+        Used to override the conversational/acknowledgment heuristic so short
+        replies do NOT leak out of the interactive agent.
+        """
+        if (state or {}).get("agent_mode") != "interactive":
+            return False
+
+        history = (state or {}).get("conversation_history") or []
+        if not history:
+            return False
+
+        last_assistant_content: str | None = None
+        for msg in reversed(history):
+            if isinstance(msg, dict):
+                role = msg.get("role")
+                content = msg.get("content") or msg.get("text") or ""
+            else:
+                role = getattr(msg, "type", None) or getattr(msg, "role", None)
+                content = getattr(msg, "content", "") or ""
+                # langchain BaseMessage uses type="ai" for assistant
+                if role == "ai":
+                    role = "assistant"
+                elif role == "human":
+                    role = "user"
+            if role == "assistant" and content:
+                last_assistant_content = str(content)
+                break
+
+        if not last_assistant_content:
+            return False
+
+        # Strip trailing emojis/whitespace and check for a question mark suffix.
+        stripped = re.sub(r"[\s\W_]+$", "", last_assistant_content)
+        # Re-add a trailing '?' check on the original (since '?' is in \W and got stripped);
+        # use the original tail to detect whether the original ended with '?'.
+        tail = re.sub(r"[\s\u200b]+$", "", last_assistant_content)
+        ends_with_question = tail.endswith("?") or "?" in last_assistant_content[-3:]
+        if not ends_with_question:
+            return False
+
+        # Skip pure greetings — student saying "hi" mid-flow is still a greeting.
+        q_norm = re.sub(r"[^\w\s]", " ", (query or "").lower()).strip()
+        q_norm = re.sub(r"\s+", " ", q_norm)
+        q_collapsed = re.sub(r"(.)\1+", r"\1", q_norm)
+        words = q_collapsed.split()
+        if words and all(w in cls._PURE_GREETING_TOKENS for w in words):
+            return False
+
+        return True
+
     @staticmethod
     def _detect_memory_intent(query: str) -> str | None:
         """Detect direct memory lookup questions that should avoid follow-up expansion."""
@@ -201,6 +265,15 @@ class AnalyzeQueryNode:
 
         # Phase 6: Sequential Analysis (Speculative RAG disabled for stability)
         import asyncio
+        # Pre-compute interactive follow-up flag once so we can short-circuit
+        # any heuristic that would otherwise pull short replies (yes/idk/hmm/?)
+        # out of the interactive agent flow.
+        interactive_followup = self._is_interactive_followup(state, query)
+        if interactive_followup:
+            logger.info(
+                "Interactive follow-up detected (agent_mode=interactive, prior assistant ended with '?'). "
+                "Overriding conversational/unclear heuristics."
+            )
         try:
             quality = self._classifier.assess_query_quality(final_query)
             updates["query_en"] = quality.normalized_query or final_query
@@ -213,7 +286,7 @@ class AnalyzeQueryNode:
             )
             logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
 
-            if quality.is_unclear and clarification_attempts < 1 and not heuristic_result:
+            if quality.is_unclear and clarification_attempts < 1 and not heuristic_result and not interactive_followup:
                 clarification_text = quality.clarification_prompt or (
                     "Could you clarify what you mean so I can help you better?"
                 )
@@ -250,7 +323,19 @@ class AnalyzeQueryNode:
             if intro_entities:
                 updates["captured_intro_entities"] = intro_entities
             
-            if heuristic_result:
+            if heuristic_result and interactive_followup:
+                # Force the short reply to remain in the interactive (curriculum_specific)
+                # flow so the InteractiveStudentAgent can follow up on its own question
+                # instead of bouncing to the ConversationalAgent.
+                result = QueryClassification(
+                    query_type="curriculum_specific",
+                    translated_query=quality.normalized_query or final_query,
+                    confidence=1.0,
+                    reasoning="Interactive follow-up: short reply to open Socratic question.",
+                    subjects=state.get("subjects") or ["General"],
+                )
+                logger.info("DEBUG: analyze_query overrode heuristic with interactive-followup classification")
+            elif heuristic_result:
                 result = heuristic_result
                 logger.info(f"DEBUG: analyze_query set result to heuristic: {result.query_type}")
             elif intro_ack:
@@ -309,6 +394,25 @@ class AnalyzeQueryNode:
                 reasoning=f"Fallback due to error: {e}"
             )
         
+        # Final safety pass: if we are in an interactive follow-up, force the
+        # routing to curriculum_specific (the InteractiveStudentAgent) so that
+        # neither LLM classifier output nor acknowledgment heuristics can leak
+        # short replies (yes/idk/hmm/?) into the ConversationalAgent.
+        if interactive_followup and result.query_type == "conversational":
+            logger.info(
+                "Final safety override: forcing interactive follow-up to curriculum_specific (was '%s').",
+                result.query_type,
+            )
+            result = QueryClassification(
+                query_type="curriculum_specific",
+                translated_query=result.translated_query or quality.normalized_query or final_query,
+                confidence=1.0,
+                reasoning="Interactive follow-up override (post-classification).",
+                subjects=result.subjects or state.get("subjects") or ["General"],
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
+
         # Prepare updates
         normalized_chat = self._classifier._normalize_chat_phrase(query)
         normalized_chat_compact = re.sub(r"([a-z])\1{2,}", r"\1\1", normalized_chat)
@@ -321,6 +425,10 @@ class AnalyzeQueryNode:
                 or "acknowledgment" in (result.reasoning or "").lower()
             )
         )
+        # Acknowledgments during an interactive follow-up should not carry the
+        # "is_acknowledgment" flag — they are answers to a Socratic question.
+        if interactive_followup:
+            is_acknowledgment_turn = False
         updates.update({
             "query_en": result.translated_query,
             "query_type": result.query_type,

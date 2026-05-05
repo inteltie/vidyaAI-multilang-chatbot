@@ -29,7 +29,20 @@ class GroundednessCheckNode:
         # Skip validation if response is a fallback or conversational
         query_type = state.get("query_type")
         response = state.get("response")
-        
+        agent_mode = state.get("agent_mode", "standard")
+
+        # Skip document-groundedness for the InteractiveStudentAgent.
+        # Socratic counter-questions are intentionally non-declarative ("What do
+        # you think happens to the ball's energy?") and are not "grounded" in
+        # retrieved documents by design. Language consistency is enforced
+        # downstream by translate_response.
+        if agent_mode == "interactive" and settings.validation_mode != "strict":
+            logger.info(
+                "Skipping groundedness for interactive agent (Socratic counter-questions are non-declarative)."
+            )
+            duration = perf_counter() - start
+            return {"timings": {"groundedness_check": duration}}
+
         # If fast mode, skip conversational queries
         if settings.validation_mode == "fast" and query_type == "conversational":
             duration = perf_counter() - start
