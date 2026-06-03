@@ -7,6 +7,7 @@ from agents.react_agent import ReActAgent, FALLBACK_MESSAGE
 from tools import ToolRegistry, RetrievalTool
 from services.retriever import RetrieverService
 from services.citation_service import CitationService
+from services.prompt_policy import GLOBAL_GUARDRAIL_RULES
 from state import AgentState, ConversationTurn
 from config import settings
 
@@ -116,6 +117,11 @@ class TeacherAgent:
                 updates["llm_calls"] = result.get("iterations", 0)
                 updates["input_tokens"] = result.get("input_tokens", 0)
                 updates["output_tokens"] = result.get("output_tokens", 0)
+                updates["token_usage_by_model"] = result.get("token_usage_by_model", {})
+                if result.get("usage_by_component"):
+                    updates["usage_by_component"] = result.get("usage_by_component")
+                if result.get("web_search_calls"):
+                    updates["web_search_calls"] = result.get("web_search_calls")
                 
                 # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
                 updates["primary_input_tokens"] = result.get("input_tokens", 0)
@@ -242,6 +248,7 @@ Key concepts: CI/CD, Docker, Kubernetes, Automation.
 Example 4 - Specific Question:
 (After retrieval)
 The amygdala is the brain structure mainly involved in processing fear and emotional responses [Source 1]. It is an almond-shaped structure sitting next to the hippocampus.
+{GLOBAL_GUARDRAIL_RULES}
 """
         return prompt
     

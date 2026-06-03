@@ -29,6 +29,20 @@ class LoadMemoryNode:
             return "en"
         return None
 
+    @staticmethod
+    def _preferred_format_from_metadata(session_metadata: Dict[str, Any]) -> str | None:
+        structured = (session_metadata or {}).get("structured_summary") or {}
+        if hasattr(structured, "model_dump"):
+            structured = structured.model_dump()
+        pref_blob = (structured or {}).get("user_preferences")
+        if not pref_blob:
+            return None
+        pref_text = str(pref_blob).lower()
+        match = re.search(r"response_format:\s*(bullets|paragraph|steps)\b", pref_text)
+        if match:
+            return match.group(1)
+        return None
+
     async def __call__(self, state: AgentState) -> Dict[str, Any]:
         start = perf_counter()
         user_session_id = state["user_session_id"]
@@ -41,7 +55,18 @@ class LoadMemoryNode:
         if preferred_lang:
             updates["preferred_response_language"] = preferred_lang
             updates["language_preference_locked"] = True
+
+        preferred_format = self._preferred_format_from_metadata(session_metadata)
+        if preferred_format:
+            updates["preferred_response_format"] = preferred_format
         
+        updates.setdefault("remembered_images", updates.get("remembered_images") or [])
+        updates.setdefault(
+            "remembered_generated_images",
+            updates.get("remembered_generated_images") or [],
+        )
+        updates.setdefault("agent_findings", [])
+
         duration = perf_counter() - start
         updates["timings"] = {"load_memory": duration}
             

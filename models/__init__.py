@@ -5,7 +5,8 @@ from .domain import (
     QueryIntent,
 
 )
-from .chat import ChatSession, ChatMessage
+from .chat import ChatSession, ChatMessage, StructuredSummary, UploadedImageRecord
+from .domain import ImageInput
 
 __all__ = [
     "ChatRequest",
@@ -15,4 +16,7 @@ __all__ = [
 
     "ChatSession",
     "ChatMessage",
+    "StructuredSummary",
+    "UploadedImageRecord",
+    "ImageInput",
 ]

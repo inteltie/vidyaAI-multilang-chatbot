@@ -38,6 +38,47 @@ def merge_metadata(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any
     return {**(left or {}), **(right or {})}
 
 
+def merge_token_usage_by_model(
+    left: Dict[str, Dict[str, int]],
+    right: Dict[str, Dict[str, int]],
+) -> Dict[str, Dict[str, int]]:
+    """Merge model-token usage maps by summing input/output counters."""
+    merged: Dict[str, Dict[str, int]] = {}
+    for source in (left or {}, right or {}):
+        for model_name, usage in (source or {}).items():
+            if not model_name:
+                continue
+            current = merged.setdefault(model_name, {"input": 0, "output": 0})
+            current["input"] += int((usage or {}).get("input", 0) or 0)
+            current["output"] += int((usage or {}).get("output", 0) or 0)
+    return merged
+
+
+def merge_usage_by_component(
+    left: Dict[str, Dict[str, Any]],
+    right: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Merge per-component usage maps (chat, web_search, vision, image_gate)."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for source in (left or {}, right or {}):
+        for component, comp_data in (source or {}).items():
+            if not component:
+                continue
+            target = merged.setdefault(component, {})
+            for key, val in (comp_data or {}).items():
+                if key in ("calls", "images"):
+                    target[key] = int(target.get(key, 0) or 0) + int(val or 0)
+                elif key == "fee_usd":
+                    target[key] = float(target.get(key, 0) or 0) + float(val or 0)
+                elif key in ("backend", "model") and val:
+                    target[key] = val
+                elif isinstance(val, dict):
+                    row = target.setdefault(key, {"input": 0, "output": 0})
+                    row["input"] += int(val.get("input", 0) or 0)
+                    row["output"] += int(val.get("output", 0) or 0)
+    return merged
+
+
 class Document(TypedDict, total=False):
     """Representation of a retrieved document from Pinecone."""
 
@@ -47,11 +88,16 @@ class Document(TypedDict, total=False):
     metadata: Dict[str, Any]
 
 
-class ConversationTurn(TypedDict):
+class ConversationTurn(TypedDict, total=False):
     """Single conversation turn stored in Redis memory."""
 
     role: Literal["user", "assistant"]
     content: str
+    has_image_input: bool
+    image_input_ids: List[str]
+    has_generated_image: bool
+    generated_image_ids: List[str]
+    generated_image_urls: List[str]
 
 
 class Citation(TypedDict, total=False):
@@ -83,6 +129,46 @@ def merge_list(left: List[str], right: List[str]) -> List[str]:
     return list(set((left or []) + (right or [])))
 
 
+class AgentFinding(TypedDict, total=False):
+    """Structured finding published by a specialist agent/node."""
+
+    source: str
+    kind: str
+    summary: str
+    payload: Dict[str, Any]
+    priority: int
+
+
+class UploadedImageRecord(TypedDict, total=False):
+    """Persisted description of an uploaded image (no raw bytes)."""
+
+    image_id: str
+    upload_id: str
+    user_query: str
+    descriptions: List[str]
+    summary_line: str
+    image_context: str
+    uploaded_at: str
+
+
+class GeneratedImageRecord(TypedDict, total=False):
+    """Persisted metadata for a generated diagram (file on disk)."""
+
+    image_id: str
+    url: str
+    mime_type: str
+    prompt_used: str
+    created_at: str
+
+
+def merge_findings(
+    left: List[AgentFinding],
+    right: List[AgentFinding],
+) -> List[AgentFinding]:
+    """Append findings from parallel or sequential node updates."""
+    return list(left or []) + list(right or [])
+
+
 class AgentState(TypedDict, total=False):
     """Full state passed between LangGraph nodes."""
 
@@ -91,6 +177,41 @@ class AgentState(TypedDict, total=False):
     user_id: str
     user_type: Literal["student", "teacher"]
     query: str
+    images: List[Dict[str, Any]]
+    has_images: bool
+    image_modality: Literal["none", "analyze", "generate"]
+    orchestration_route: Literal[
+        "none", "retriever", "web", "hybrid", "image_generate", "image_analyze"
+    ]
+    route_reason: str
+    route_confidence: float
+    route_fallback_reason: str
+    generated_images: List[Dict[str, Any]]
+    remembered_generated_images: List[GeneratedImageRecord]
+    message_modality_timeline: List[Dict[str, Any]]
+    new_generated_image_records: List[GeneratedImageRecord]
+    remembered_images: List[UploadedImageRecord]
+    image_descriptions: List[str]
+    image_context: str
+    effective_query: str
+    context_resolution_block: str
+    is_context_resolved_followup: bool
+    wants_visual_output: bool
+    wants_flowchart: bool
+    response_strategy: str
+    preferred_response_format: str
+    query_understanding: Dict[str, Any]
+    # Authoritative, context-aware plan for the current turn (produced by
+    # OrchestratorNode; consumed by analyze_query + route_decision).
+    turn_plan: Dict[str, Any]
+    image_inject_level: Literal["none", "compact", "full"]
+    image_inject_block: str
+    image_gate_reason: str
+    new_uploaded_image_records: List[UploadedImageRecord]
+    interactive_turn_type: str
+    agent_findings: Annotated[List[AgentFinding], merge_findings]
+    translation_action: Literal["skip", "translate"]
+    translation_skip_reason: str
     language: str
     preferred_response_language: str
     language_preference_locked: bool
@@ -131,6 +252,24 @@ class AgentState(TypedDict, total=False):
     primary_output_tokens: Annotated[int, operator.add]
     aux_input_tokens: Annotated[int, operator.add]
     aux_output_tokens: Annotated[int, operator.add]
+    token_usage_by_model: Annotated[Dict[str, Dict[str, int]], merge_token_usage_by_model]
+    usage_by_component: Annotated[Dict[str, Dict[str, Any]], merge_usage_by_component]
+    web_search_calls: Annotated[int, operator.add]
+    images_analyzed: Annotated[int, operator.add]
+    image_generation_calls: Annotated[int, operator.add]
+    image_generation_backend: str
+    image_model_used: str
+    image_generation_status: str
+    image_generation_error_reason: str
+    embedding_tokens: Annotated[int, operator.add]
+    web_rewrite_enabled: bool
+    web_query_original: str
+    web_query_used: str
+    rewrite_input_tokens: Annotated[int, operator.add]
+    rewrite_output_tokens: Annotated[int, operator.add]
+    rewrite_guard_reason: str
+    rewrite_overlap_ratio: float
+    rewrite_used_original_due_to_guard: bool
 
     # Legacy / Aggregate fields (keep for compatibility/simplicity)
     llm_calls: Annotated[int, operator.add]

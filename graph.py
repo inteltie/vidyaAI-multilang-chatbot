@@ -19,6 +19,8 @@ from nodes import (
     GroundednessCheckNode,
     RetrieveDocumentsNode,
     AnalyzeQueryNode,
+    OrchestratorNode,
+    RouteDecisionNode,
 )
 from models import QueryIntent
 from state import AgentState
@@ -26,7 +28,7 @@ from state import AgentState
 logger = logging.getLogger(__name__)
 
 RouteKey = Literal["off_topic", "needs_context", "ok"]
-AgentRouteKey = Literal["conversational", "educational"]
+AgentRouteKey = Literal["conversational", "educational", "image_generation"]
 
 
 class ChatbotGraphBuilder:
@@ -35,26 +37,32 @@ class ChatbotGraphBuilder:
     def __init__(
         self,
         load_memory: LoadMemoryNode,
+        orchestrate_turn: OrchestratorNode,
         analyze_query: AnalyzeQueryNode,
         conversational_agent: ConversationalAgentNode,
         student_agent: StudentAgentNode,
         interactive_student_agent: InteractiveStudentAgentNode,
         teacher_agent: TeacherAgentNode,
         retrieve_documents: RetrieveDocumentsNode,
+        route_decision: RouteDecisionNode,
         groundedness_check: GroundednessCheckNode,
         translate_response: TranslateResponseNode,
         save_memory: SaveMemoryNode,
+        image_generation_agent=None,
     ) -> None:
         self._load_memory = load_memory
+        self._orchestrate_turn = orchestrate_turn
         self._analyze_query = analyze_query
         self._conversational_agent = conversational_agent
         self._student_agent = student_agent
         self._interactive_student_agent = interactive_student_agent
         self._teacher_agent = teacher_agent
         self._retrieve_documents = retrieve_documents
+        self._route_decision = route_decision
         self._groundedness_check = groundedness_check
         self._translate_response = translate_response
         self._save_memory = save_memory
+        self._image_generation_agent = image_generation_agent
 
     @staticmethod
     def _route_educational_user(state: AgentState) -> Literal["student", "interactive", "teacher"]:
@@ -72,12 +80,27 @@ class ChatbotGraphBuilder:
     @staticmethod
     def _route_to_agent(state: AgentState) -> AgentRouteKey:
         """Route to appropriate agent based on query_type."""
+        route = state.get("orchestration_route")
+        if route == "none":
+            return "conversational"
+        if route == "image_analyze":
+            logger.info("Image analysis route selected; routing to educational pipeline.")
+            return "educational"
+        if route == "image_generate" or state.get("query_type") == "image_generation":
+            logger.info("Image generation modality; routing to image_generation_agent.")
+            return "image_generation"
+
+        if route == "image_analyze" or state.get("has_images") or state.get("images"):
+            logger.info(
+                "Image upload present; routing to educational flow (vision via interactive agent)."
+            )
+            return "educational"
+
         query_type = state.get("query_type", "curriculum_specific")
-        
+
         if query_type == "conversational":
             return "conversational"
-        else:  # curriculum_specific -> route by user_type
-            return "educational"
+        return "educational"
 
     @staticmethod
     def _route_after_validation(state: AgentState) -> Literal["pass", "fail"]:
@@ -103,8 +126,12 @@ class ChatbotGraphBuilder:
 
         # Register nodes
         graph.add_node("load_memory", self._load_memory)
+        graph.add_node("orchestrate_turn", self._orchestrate_turn)
         graph.add_node("analyze_query", self._analyze_query)
+        graph.add_node("route_decision", self._route_decision)
         graph.add_node("conversational_agent", self._conversational_agent)
+        if self._image_generation_agent is not None:
+            graph.add_node("image_generation_agent", self._image_generation_agent)
         graph.add_node("student_agent", self._student_agent)
         graph.add_node("interactive_student_agent", self._interactive_student_agent)
         graph.add_node("teacher_agent", self._teacher_agent)
@@ -113,22 +140,29 @@ class ChatbotGraphBuilder:
         graph.add_node("translate_response", self._translate_response)
         graph.add_node("save_memory", self._save_memory)
 
-        # 1. Start with memory loading
+        # 1. Start with memory loading, then context-aware turn planning.
         graph.set_entry_point("load_memory")
-        graph.add_edge("load_memory", "analyze_query")
+        graph.add_edge("load_memory", "orchestrate_turn")
+        graph.add_edge("orchestrate_turn", "analyze_query")
+        graph.add_edge("analyze_query", "route_decision")
 
         # 2. Main Routing: Conversational vs Educational
+        route_map = {
+            "conversational": "conversational_agent",
+            "educational": "prepare_educational_flow",
+        }
+        if self._image_generation_agent is not None:
+            route_map["image_generation"] = "image_generation_agent"
         graph.add_conditional_edges(
-            "analyze_query",
+            "route_decision",
             self._route_to_agent,
-            {
-                "conversational": "conversational_agent",
-                "educational": "prepare_educational_flow",
-            },
+            route_map,
         )
 
         # 3. Conversational Pipeline: Direct to translation
         graph.add_edge("conversational_agent", "translate_response")
+        if self._image_generation_agent is not None:
+            graph.add_edge("image_generation_agent", "translate_response")
 
         # 4. Educational Pipeline: Strictly Sequential (Retrieval -> Agent -> Validation)
         # This prevents the race condition and duplication

@@ -4,6 +4,7 @@ from typing import Any, Dict
 import logging
 from state import AgentState
 from services.response_validator import ResponseValidator
+from services.agent_findings import publish
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,34 @@ class GroundednessCheckNode:
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
             "aux_input_tokens": result.input_tokens,
-            "aux_output_tokens": result.output_tokens
+            "aux_output_tokens": result.output_tokens,
+            "token_usage_by_model": {
+                getattr(self._validator._llm, "model_name", "unknown"): {
+                    "input": result.input_tokens,
+                    "output": result.output_tokens,
+                }
+            },
         }
+        from services.costing import patch_component_usage
+
+        validator_model = getattr(self._validator._llm, "model_name", "unknown")
+        updates.update(
+            patch_component_usage(
+                "chat", validator_model, result.input_tokens, result.output_tokens
+            )
+        )
+
+        if not result.is_valid:
+            updates["agent_findings"] = publish(
+                state.get("agent_findings"),
+                "groundedness_check",
+                "validation",
+                (result.feedback or result.reasoning or "Validation failed")[:120],
+                {
+                    "is_valid": False,
+                    "feedback": result.feedback or result.reasoning or "",
+                },
+                priority=9,
+            )
         
         return updates

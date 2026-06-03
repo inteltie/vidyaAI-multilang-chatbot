@@ -5,6 +5,7 @@ from .parse_session_context import ParseSessionContextNode
 from .translate_response import TranslateResponseNode
 from .save_memory import SaveMemoryNode
 from .analyze_query import AnalyzeQueryNode
+from .orchestrate_turn import OrchestratorNode
 from .conversational_agent_node import ConversationalAgentNode
 from .general_agent_node import GeneralAgentNode
 from .react_agent_node import ReActAgentNode
@@ -13,6 +14,8 @@ from .teacher_agent_node import TeacherAgentNode
 from .interactive_student_agent_node import InteractiveStudentAgentNode
 from .retrieve_documents import RetrieveDocumentsNode
 from .groundedness_check import GroundednessCheckNode
+from .image_generation_agent_node import ImageGenerationAgentNode
+from .route_decision import RouteDecisionNode
 
 __all__ = [
     "LoadMemoryNode",
@@ -20,6 +23,7 @@ __all__ = [
     "TranslateResponseNode",
     "SaveMemoryNode",
     "AnalyzeQueryNode",
+    "OrchestratorNode",
     "ConversationalAgentNode",
     "GeneralAgentNode",
     "ReActAgentNode",
@@ -28,4 +32,6 @@ __all__ = [
     "InteractiveStudentAgentNode",
     "RetrieveDocumentsNode",
     "GroundednessCheckNode",
+    "ImageGenerationAgentNode",
+    "RouteDecisionNode",
 ]

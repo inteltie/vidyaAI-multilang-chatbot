@@ -39,7 +39,7 @@ class WebSearchTool(Tool):
             },
         }
     
-    async def execute(self, query: str, **kwargs) -> tuple[str, int, int]:
+    async def execute(self, query: str, **kwargs) -> tuple[str, int, int, bool]:
         """
         Execute web search using OpenAI's native capability.
         
@@ -47,7 +47,8 @@ class WebSearchTool(Tool):
             query: Search query string
             
         Returns:
-            String with rich search results summary and citations.
+            Tuple of (result_text, input_tokens, output_tokens, billable_call).
+            billable_call is False on cache hits and failures.
         """
         try:
             # Check cache
@@ -55,7 +56,7 @@ class WebSearchTool(Tool):
             cached_result = await CacheService.get(cache_key)
             if cached_result:
                 logger.info("Cache HIT for web search: %s", query)
-                return cached_result, 0, 0
+                return cached_result, 0, 0, False
             
             logger.info("Executing web search for: %s", query[:100])
             
@@ -109,7 +110,7 @@ class WebSearchTool(Tool):
             
             if not final_text:
                 logger.warning("No text content found in web search response: %s", response)
-                return "No information found for this query.", i_tokens, o_tokens
+                return "No information found for this query.", i_tokens, o_tokens, True
             
             # Append collected citations if they aren't already embedded nicely
             # (OpenAI usually embeds them as [1], [2] etc, but adding a sources list is helpful)
@@ -122,11 +123,16 @@ class WebSearchTool(Tool):
             # Cache result (TTL 24 hours)
             await CacheService.set(cache_key, final_result, ttl=86400)
             
-            return final_result, i_tokens, o_tokens
+            return final_result, i_tokens, o_tokens, True
             
         except Exception as exc:
             logger.error("Web search failed: %s", exc)
-            return f"Web search failed: Could not retrieve results for '{query}'. Error: {str(exc)}", 0, 0
+            return (
+                f"Web search failed: Could not retrieve results for '{query}'. Error: {str(exc)}",
+                0,
+                0,
+                False,
+            )
 
 
 __all__ = ["WebSearchTool"]

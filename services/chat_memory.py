@@ -1,20 +1,35 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 import redis.asyncio as aioredis
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import (
+    ConnectionFailure,
+    DuplicateKeyError,
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
+)
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage, trim_messages
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, trim_messages
 import tiktoken
 
-from models import ChatSession, ChatMessage
+from models import ChatSession, ChatMessage, StructuredSummary, UploadedImageRecord
+from models.chat import GeneratedImageRecord, get_ist_now
 from state import ConversationTurn
 from config import settings
+from services.message_modality import modality_to_kwargs
 
 logger = logging.getLogger(__name__)
+
+_MONGO_TRANSIENT_ERRORS = (
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
+    ConnectionFailure,
+)
+
 
 class MemoryService:
     """
@@ -173,11 +188,62 @@ class MemoryService:
 
         return summary, trimmed_history
 
-    async def add_message(self, session_id: str, role: str, content: str):
-        """Add message to Redis buffer and MongoDB."""
-        # 1. Redis Buffer
+    @staticmethod
+    def _buffer_row(
+        role: str,
+        content: str,
+        *,
+        has_image_input: bool = False,
+        image_input_ids: Optional[List[str]] = None,
+        has_generated_image: bool = False,
+        generated_image_ids: Optional[List[str]] = None,
+        generated_image_urls: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "role": role,
+            "content": content,
+            "has_image_input": has_image_input,
+            "image_input_ids": list(image_input_ids or []),
+            "has_generated_image": has_generated_image,
+            "generated_image_ids": list(generated_image_ids or []),
+            "generated_image_urls": list(generated_image_urls or []),
+        }
+
+    @staticmethod
+    def _mongo_row_to_buffer(msg: ChatMessage) -> Dict[str, Any]:
+        return MemoryService._buffer_row(
+            msg.role,
+            msg.text,
+            has_image_input=bool(getattr(msg, "has_image_input", False)),
+            image_input_ids=list(getattr(msg, "image_input_ids", None) or []),
+            has_generated_image=bool(getattr(msg, "has_generated_image", False)),
+            generated_image_ids=list(getattr(msg, "generated_image_ids", None) or []),
+            generated_image_urls=list(getattr(msg, "generated_image_urls", None) or []),
+        )
+
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        *,
+        has_image_input: bool = False,
+        image_input_ids: Optional[List[str]] = None,
+        has_generated_image: bool = False,
+        generated_image_ids: Optional[List[str]] = None,
+        generated_image_urls: Optional[List[str]] = None,
+    ):
+        """Add message to Redis buffer (Mongo persistence via background_save_message)."""
         redis_key = f"chat:{session_id}:buffer"
-        msg = {"role": role, "content": content}
+        msg = self._buffer_row(
+            role,
+            content,
+            has_image_input=has_image_input,
+            image_input_ids=image_input_ids,
+            has_generated_image=has_generated_image,
+            generated_image_ids=generated_image_ids,
+            generated_image_urls=generated_image_urls,
+        )
         
         try:
             # Check last message in Redis to prevent duplicates
@@ -198,7 +264,19 @@ class MemoryService:
         except Exception as e:
             logger.warning(f"Skipping Redis update for {session_id} due to connection error: {e}")
 
-    async def background_save_message(self, session_id: str, user_id: str, role: str, content: str):
+    async def background_save_message(
+        self,
+        session_id: str,
+        user_id: str,
+        role: str,
+        content: str,
+        *,
+        has_image_input: bool = False,
+        image_input_ids: Optional[List[str]] = None,
+        has_generated_image: bool = False,
+        generated_image_ids: Optional[List[str]] = None,
+        generated_image_urls: Optional[List[str]] = None,
+    ):
         """Background task to save message to MongoDB and handle summarization."""
         try:
             session = await ChatSession.find_one(ChatSession.session_id == session_id)
@@ -216,7 +294,15 @@ class MemoryService:
                     logger.warning(f"Duplicate MongoDB message detected for session {session_id}. Skipping.")
                     return
 
-            await session.add_message(role, content)
+            await session.add_message(
+                role,
+                content,
+                has_image_input=has_image_input,
+                image_input_ids=image_input_ids,
+                has_generated_image=has_generated_image,
+                generated_image_ids=generated_image_ids,
+                generated_image_urls=generated_image_urls,
+            )
             
             # Update summary every 10 messages for better context (increased frequency)
             if len(session.messages) % 10 == 0:
@@ -279,16 +365,40 @@ class MemoryService:
                     raw_content = raw_content[7:-3].strip()
                 elif raw_content.startswith("```") and raw_content.endswith("```"):
                     raw_content = raw_content[3:-3].strip()
-                
+                else:
+                    # Best-effort JSON extraction when model prepends/appends prose.
+                    match = re.search(r"\{.*\}", raw_content, flags=re.DOTALL)
+                    if match:
+                        raw_content = match.group(0).strip()
+
+                last_valid_structured = (
+                    current_summary_payload if isinstance(current_summary_payload, dict) else {}
+                )
                 try:
-                    structured_summary = json.loads(raw_content)
+                    structured_summary_raw = json.loads(raw_content)
                 except json.JSONDecodeError:
                     logger.error("Failed to parse structured summary JSON for %s. Content: %s", session_id, raw_content)
-                    # Fallback to simple summary in string field for safety
-                    structured_summary = None
-                    summary_str = self._truncate_summary(raw_content)
+                    structured_summary = last_valid_structured or None
+                    if last_valid_structured:
+                        summary_str = self._truncate_summary(str(last_valid_structured))
+                    else:
+                        summary_str = self._truncate_summary(raw_content)
                 else:
-                    summary_str = self._truncate_summary(structured_summary.get("summary", ""))
+                    try:
+                        validated = StructuredSummary.model_validate(structured_summary_raw)
+                        structured_summary = validated.model_dump(exclude_none=True)
+                        summary_str = self._truncate_summary(structured_summary.get("summary", ""))
+                    except Exception as exc:
+                        logger.error(
+                            "Structured summary schema validation failed for %s: %s. Keeping previous structured summary.",
+                            session_id,
+                            exc,
+                        )
+                        structured_summary = last_valid_structured or None
+                        fallback_summary = ""
+                        if isinstance(last_valid_structured, dict):
+                            fallback_summary = str(last_valid_structured.get("summary", ""))
+                        summary_str = self._truncate_summary(fallback_summary)
 
                 # Track token usage for background summarization
                 usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
@@ -326,68 +436,136 @@ class MemoryService:
         except Exception as e:
             logger.error(f"Failed to update summary for session {session_id}: {e}")
 
+    async def _fetch_session_document(self, session_id: str) -> tuple[Optional[ChatSession], bool]:
+        """Load session from Mongo; return (session, mongo_reachable)."""
+        try:
+            session = await ChatSession.find_one(ChatSession.session_id == session_id)
+            return session, True
+        except _MONGO_TRANSIENT_ERRORS as exc:
+            logger.warning(
+                "MongoDB timeout loading session %s (using Redis-only fallback): %s",
+                session_id,
+                exc,
+            )
+            return None, False
+        except Exception as exc:
+            logger.warning(
+                "MongoDB error loading session %s (using Redis-only fallback): %s",
+                session_id,
+                exc,
+            )
+            return None, False
+
+    async def _load_redis_buffer(self, session_id: str) -> List[Dict[str, Any]]:
+        """Load chat buffer from Redis only (fast path)."""
+        redis_key = f"chat:{session_id}:buffer"
+        try:
+            raw_msgs = await self._redis.lrange(redis_key, 0, -1)
+            if not raw_msgs:
+                return []
+            buffer = [json.loads(m) for m in raw_msgs]
+            for msg in buffer:
+                if "content" not in msg and "text" in msg:
+                    msg["content"] = msg.pop("text")
+            return buffer
+        except Exception as exc:
+            logger.debug("Redis buffer load failed for %s: %s", session_id, exc)
+            return []
+
+    async def _load_chat_buffer(
+        self,
+        session_id: str,
+        session: Optional[ChatSession],
+    ) -> List[Dict[str, Any]]:
+        """Load recent messages from Redis, seeding from Mongo when possible."""
+        buffer = await self._load_redis_buffer(session_id)
+        if buffer:
+            return buffer
+
+        redis_key = f"chat:{session_id}:buffer"
+        try:
+            if session and session.messages:
+                recent_msgs = session.messages[-settings.memory_buffer_size :]
+                buffer = [self._mongo_row_to_buffer(m) for m in recent_msgs]
+                if buffer:
+                    await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
+                    await self._redis.expire(redis_key, settings.memory_buffer_ttl)
+        except Exception as exc:
+            logger.warning("Redis buffer load failed for %s: %s", session_id, exc)
+            if session and session.messages:
+                recent_msgs = session.messages[-settings.memory_buffer_size :]
+                buffer = [self._mongo_row_to_buffer(m) for m in recent_msgs]
+        return buffer
+
     async def load_session_full(self, user_id: str, session_id: str) -> Dict[str, Any]:
         """
         Optimized single-pass session load: Returns everything needed for LoadMemoryNode.
-        Avoids redundant DB calls.
+        Redis buffer first; Mongo metadata with a short timeout. Falls back to Redis-only
+        when MongoDB is slow or unreachable.
         """
-        # 1. Get or create MongoDB session (Single DB Hit)
-        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        buffer = await self._load_redis_buffer(session_id)
+
+        session: Optional[ChatSession] = None
+        mongo_ok = True
+        try:
+            session, mongo_ok = await asyncio.wait_for(
+                self._fetch_session_document(session_id),
+                timeout=settings.mongo_session_load_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            mongo_ok = False
+            logger.warning(
+                "MongoDB session load exceeded %.1fs for %s (using Redis-first fallback)",
+                settings.mongo_session_load_timeout_s,
+                session_id,
+            )
+
         is_restart = False
-        
+        summary = None
+
         if not session:
-            session = ChatSession(session_id=session_id, user_id=user_id)
-            await session.insert()
-            buffer = []
-            summary = None
+            if mongo_ok:
+                try:
+                    session = ChatSession(session_id=session_id, user_id=user_id)
+                    await session.insert()
+                except Exception as exc:
+                    mongo_ok = False
+                    session = None
+                    logger.warning(
+                        "Could not create Mongo session %s: %s",
+                        session_id,
+                        exc,
+                    )
         else:
-            # Check for restart condition
             if session.updated_at:
                 now = datetime.utcnow()
                 updated_at = session.updated_at
                 if updated_at.tzinfo is not None:
                     updated_at = updated_at.astimezone(timezone.utc).replace(tzinfo=None)
-                
+
                 diff = (now - updated_at).total_seconds()
                 if diff > self.SESSION_RESTART_THRESHOLD and len(session.messages) > 0:
                     is_restart = True
-                    logger.info("Session %s detected as restart (Inactivity: %.1fs)", session_id, diff)
-            
+                    logger.info(
+                        "Session %s detected as restart (Inactivity: %.1fs)",
+                        session_id,
+                        diff,
+                    )
             summary = session.summary
 
-            # 2. Load Redis buffer
-            redis_key = f"chat:{session_id}:buffer"
-            buffer = []
-            try:
-                raw_msgs = await self._redis.lrange(redis_key, 0, -1)
-                if raw_msgs:
-                    buffer = [json.loads(m) for m in raw_msgs]
-                    # Fix legacy key if present
-                    for msg in buffer:
-                        if "content" not in msg and "text" in msg:
-                            msg["content"] = msg.pop("text")
-                else:
-                    # Seed Redis from DB if buffer is empty
-                    recent_msgs = session.messages[-settings.memory_buffer_size:]
-                    buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
-                    if buffer:
-                        await self._redis.rpush(redis_key, *[json.dumps(m) for m in buffer])
-                        await self._redis.expire(redis_key, settings.memory_buffer_ttl)
-            except Exception as e:
-                logger.warning(f"Redis fallback in load_session_full for {session_id}: {e}")
-                # Fallback to MongoDB
-                recent_msgs = session.messages[-settings.memory_buffer_size:]
-                buffer = [{"role": m.role, "content": m.text} for m in recent_msgs]
+        if not buffer:
+            buffer = await self._load_chat_buffer(session_id, session)
 
         # 3. Convert to BaseMessage and Trim
         messages: List[BaseMessage] = []
         for m in buffer:
             role = m.get("role", "user")
             content = m.get("content", "")
+            kwargs = modality_to_kwargs(m)
             if role == "user":
-                messages.append(HumanMessage(content=content))
+                messages.append(HumanMessage(content=content, additional_kwargs=kwargs))
             elif role == "assistant":
-                messages.append(AIMessage(content=content))
+                messages.append(AIMessage(content=content, additional_kwargs=kwargs))
 
         trimmed_history = trim_messages(
             messages[-settings.memory_buffer_size:],
@@ -398,14 +576,186 @@ class MemoryService:
             include_system=False,
         )
 
+        modality_timeline: List[Dict[str, Any]] = []
+        for msg in trimmed_history:
+            role = "user" if isinstance(msg, HumanMessage) else "assistant"
+            kwargs = getattr(msg, "additional_kwargs", None) or {}
+            modality_timeline.append(
+                {
+                    "role": role,
+                    "content_preview": str(getattr(msg, "content", ""))[:120],
+                    **modality_to_kwargs(kwargs),
+                }
+            )
+
+        remembered: List[Dict[str, Any]] = []
+        if session and getattr(session, "uploaded_images", None):
+            for rec in session.uploaded_images:
+                if hasattr(rec, "model_dump"):
+                    remembered.append(rec.model_dump())
+                elif isinstance(rec, dict):
+                    remembered.append(rec)
+
+        remembered_generated: List[Dict[str, Any]] = []
+        if session and getattr(session, "generated_images", None):
+            for rec in session.generated_images:
+                if hasattr(rec, "model_dump"):
+                    remembered_generated.append(rec.model_dump(mode="json"))
+                elif isinstance(rec, dict):
+                    remembered_generated.append(rec)
+
+        structured_summary = (
+            getattr(session, "structured_summary", None) if session else None
+        )
+        session_metadata: Dict[str, Any] = {}
+        if summary or structured_summary:
+            session_metadata = {
+                "summary": summary,
+                "structured_summary": structured_summary,
+            }
+        if not mongo_ok:
+            session_metadata["memory_degraded"] = True
+            session_metadata["memory_degraded_reason"] = "mongodb_unreachable"
+
         return {
             "conversation_history": trimmed_history,
+            "message_modality_timeline": modality_timeline,
             "is_session_restart": is_restart,
-            "session_metadata": {
-                "summary": summary,
-                "structured_summary": session.structured_summary
-            } if (summary or session.structured_summary) else {}
+            "remembered_images": remembered,
+            "remembered_generated_images": remembered_generated,
+            "session_metadata": session_metadata,
+            "memory_degraded": not mongo_ok,
         }
+
+    async def append_uploaded_images(
+        self,
+        session_id: str,
+        user_id: str,
+        records: List[Dict[str, Any]],
+    ) -> None:
+        """Persist new image analyzer records and enforce session cap."""
+        if not records:
+            return
+
+        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        if not session:
+            session = ChatSession(session_id=session_id, user_id=user_id)
+            await session.insert()
+
+        existing = list(session.uploaded_images or [])
+        for raw in records:
+            existing.append(UploadedImageRecord(**raw))
+
+        cap = settings.max_remembered_images
+        if len(existing) > cap:
+            existing = existing[-cap:]
+
+        await session.update(
+            {
+                "$set": {
+                    "uploaded_images": existing,
+                    "updated_at": get_ist_now(),
+                }
+            }
+        )
+
+    async def append_generated_images(
+        self,
+        session_id: str,
+        user_id: str,
+        records: List[Dict[str, Any]],
+    ) -> None:
+        """Persist generated diagram metadata (no base64) and enforce session cap."""
+        if not records:
+            return
+
+        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        if not session:
+            session = ChatSession(session_id=session_id, user_id=user_id)
+            await session.insert()
+
+        existing = list(session.generated_images or [])
+        for raw in records:
+            existing.append(GeneratedImageRecord(**raw))
+
+        cap = settings.max_remembered_generated_images
+        if len(existing) > cap:
+            existing = existing[-cap:]
+
+        await session.update(
+            {
+                "$set": {
+                    "generated_images": existing,
+                    "updated_at": get_ist_now(),
+                }
+            }
+        )
+
+    async def get_generated_images(self, session_id: str) -> List[Dict[str, Any]]:
+        """Return persisted generated image metadata for a session (no base64)."""
+        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        if not session or not session.generated_images:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for rec in session.generated_images:
+            if hasattr(rec, "model_dump"):
+                out.append(rec.model_dump(mode="json"))
+            elif isinstance(rec, dict):
+                out.append(rec)
+        return out
+
+    async def update_user_preferences(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        response_format: str | None = None,
+    ) -> None:
+        """
+        Persist lightweight user preferences immediately (not waiting for background summarization).
+
+        Stored inside ChatSession.structured_summary.user_preferences (string) for backward compatibility.
+        """
+        if not response_format:
+            return
+        response_format = str(response_format).strip().lower()
+        if response_format not in {"bullets", "paragraph", "steps"}:
+            return
+
+        session = await ChatSession.find_one(ChatSession.session_id == session_id)
+        if not session:
+            session = ChatSession(session_id=session_id, user_id=user_id)
+            try:
+                await session.insert()
+            except DuplicateKeyError:
+                session = await ChatSession.find_one(ChatSession.session_id == session_id)
+
+        structured = getattr(session, "structured_summary", None)
+        if structured and hasattr(structured, "model_dump"):
+            structured_payload = structured.model_dump(exclude_none=True)
+        elif isinstance(structured, dict):
+            structured_payload = structured
+        else:
+            structured_payload = {"summary": session.summary or ""}
+
+        prefs = str(structured_payload.get("user_preferences") or "").strip()
+        # Remove older response_format lines if present.
+        prefs_lines = [ln for ln in prefs.splitlines() if ln.strip()]
+        prefs_lines = [ln for ln in prefs_lines if not ln.lower().startswith("response_format:")]
+        prefs_lines.append(f"response_format: {response_format}")
+        structured_payload["user_preferences"] = "\n".join(prefs_lines).strip()
+
+        # Validate via StructuredSummary if possible; if not, still store dict.
+        try:
+            validated = StructuredSummary.model_validate(structured_payload)
+            structured_payload = validated.model_dump(exclude_none=True)
+        except Exception:
+            pass
+
+        await session.update(
+            {"$set": {"structured_summary": structured_payload, "updated_at": get_ist_now()}}
+        )
 
     async def get_history(self, session_id: str) -> List[ConversationTurn]:
         """Get history from Redis buffer (for compatibility) with DB fallback."""
@@ -417,17 +767,38 @@ class MemoryService:
                 session = await ChatSession.find_one(ChatSession.session_id == session_id)
                 if session:
                     recent = session.messages[-settings.memory_buffer_size:]
-                    return [ConversationTurn(role=m.role, content=m.text) for m in recent]
+                    return [self._turn_from_mongo(m) for m in recent]
                 return []
-                
-            return [
-                ConversationTurn(role=m["role"], content=m["content"])
-                for m in [json.loads(rm) for rm in raw_msgs]
-            ]
+
+            return [self._turn_from_buffer(json.loads(rm)) for rm in raw_msgs]
         except Exception as e:
             logger.warning(f"Redis failure in get_history for {session_id}: {e}")
             session = await ChatSession.find_one(ChatSession.session_id == session_id)
             if session:
                 recent = session.messages[-settings.memory_buffer_size:]
-                return [ConversationTurn(role=m.role, content=m.text) for m in recent]
+                return [self._turn_from_mongo(m) for m in recent]
             return []
+
+    @staticmethod
+    def _turn_from_buffer(row: Dict[str, Any]) -> ConversationTurn:
+        return ConversationTurn(
+            role=row.get("role", "user"),
+            content=row.get("content", ""),
+            has_image_input=bool(row.get("has_image_input")),
+            image_input_ids=list(row.get("image_input_ids") or []),
+            has_generated_image=bool(row.get("has_generated_image")),
+            generated_image_ids=list(row.get("generated_image_ids") or []),
+            generated_image_urls=list(row.get("generated_image_urls") or []),
+        )
+
+    @staticmethod
+    def _turn_from_mongo(msg: ChatMessage) -> ConversationTurn:
+        return ConversationTurn(
+            role=msg.role,
+            content=msg.text,
+            has_image_input=bool(getattr(msg, "has_image_input", False)),
+            image_input_ids=list(getattr(msg, "image_input_ids", None) or []),
+            has_generated_image=bool(getattr(msg, "has_generated_image", False)),
+            generated_image_ids=list(getattr(msg, "generated_image_ids", None) or []),
+            generated_image_urls=list(getattr(msg, "generated_image_urls", None) or []),
+        )

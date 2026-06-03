@@ -4,6 +4,7 @@ import logging
 from langchain_openai import ChatOpenAI
 from state import AgentState
 from config import settings
+from services.prompt_policy import GLOBAL_GUARDRAIL_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ History:
 
 Query: {query}
 Respond concisely.
+{GLOBAL_GUARDRAIL_RULES}
 """
         resp = await self._llm.ainvoke(prompt, config={"max_tokens": settings.main_response_tokens})
         response = resp.content.strip()
@@ -71,6 +73,11 @@ Respond concisely.
             o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
             updates["input_tokens"] = i_tokens
             updates["output_tokens"] = o_tokens
+            from services.costing import patch_component_usage
+
+            updates.update(
+                patch_component_usage("chat", self._llm.model_name, i_tokens, o_tokens)
+            )
             logger.info(
                 "[TOKEN_USAGE] GeneralAgent: input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
                 i_tokens,

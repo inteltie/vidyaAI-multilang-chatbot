@@ -6,6 +6,9 @@ from .interactive_student_agent import InteractiveStudentAgent
 from .react_agent import ReActAgent
 from .student_agent import StudentAgent
 from .teacher_agent import TeacherAgent
+from .image_analyzer_agent import ImageAnalyzerAgent
+from .image_context_gate_agent import ImageContextGateAgent
+from .translation_agent import TranslationAgent
 
 __all__ = [
     "ConversationalAgent",
@@ -14,4 +17,7 @@ __all__ = [
     "ReActAgent",
     "StudentAgent",
     "TeacherAgent",
+    "ImageAnalyzerAgent",
+    "ImageContextGateAgent",
+    "TranslationAgent",
 ]

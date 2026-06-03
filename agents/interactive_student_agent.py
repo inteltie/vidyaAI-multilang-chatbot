@@ -8,10 +8,16 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
 from agents.react_agent import ReActAgent, FALLBACK_MESSAGE
+from agents.image_analyzer_agent import ImageAnalyzerAgent
+from agents.image_context_gate_agent import ImageContextGateAgent
 from tools import ToolRegistry, RetrievalTool
 from tools.web_search_tool import WebSearchTool
 from services.retriever import RetrieverService
 from services.citation_service import CitationService
+from services.tutor_context_composer import TutorContextComposer
+from services.image_turn_pipeline import prepare_image_turn
+from services.agent_findings import publish
+from services.prompt_policy import GLOBAL_GUARDRAIL_RULES
 from state import AgentState, ConversationTurn
 from config import settings
 
@@ -68,10 +74,17 @@ class InteractiveStudentAgent:
         retriever: RetrieverService,
         max_iterations: Optional[int] = None,
         enable_web_search: bool = True,
+        image_analyzer: Optional[ImageAnalyzerAgent] = None,
+        image_gate: Optional[ImageContextGateAgent] = None,
+        tutor_composer: Optional[TutorContextComposer] = None,
+        llm_fast: Optional[ChatOpenAI] = None,
     ):
         self.llm = llm
         self.retriever = retriever
         self.enable_web_search = enable_web_search
+        self._image_analyzer = image_analyzer or ImageAnalyzerAgent(llm)
+        self._image_gate = image_gate or ImageContextGateAgent(llm_fast)
+        self._tutor_composer = tutor_composer or TutorContextComposer()
         
         # Resolve config safely
         real_max_iterations = max_iterations or (settings.max_iterations if settings else 5)
@@ -87,7 +100,7 @@ class InteractiveStudentAgent:
             llm=llm,
             tool_registry=self.tool_registry,
             max_iterations=real_max_iterations,
-            enforce_sequential=False,
+            enforce_sequential=True,
             is_interactive=True,
         )
     
@@ -375,31 +388,65 @@ HOW TO RESPOND:
 - Apply the CROSS-QUESTIONING LOOP and the CURRENT TURN TYPE directive.
 - Strictly embody the **{identity['name']}** persona.
 - Respond entirely in {target_lang}. Do NOT use any source labels or citations in the text.
+{GLOBAL_GUARDRAIL_RULES}
 """
         return prompt
     
+    async def _run_interactive_prep(self, state: AgentState) -> Dict[str, Any]:
+        """Image analyze → gate → pedagogy finding → tutor context."""
+        history = state.get("conversation_history", [])
+        turn_type: TurnType = self._detect_turn_type(
+            history, state.get("query") or state.get("query_en") or ""
+        )
+
+        findings = publish(
+            list(state.get("agent_findings") or []),
+            "interactive_prep",
+            "pedagogy",
+            f"turn_type={turn_type}",
+            {
+                "turn_type": turn_type,
+                "student_grade": state.get("student_grade", "B"),
+                "agent_mode": "interactive",
+            },
+        )
+        working_state = dict(state)
+        working_state["agent_findings"] = findings
+
+        prep = await prepare_image_turn(
+            working_state,
+            image_analyzer=self._image_analyzer,
+            image_gate=self._image_gate,
+            tutor_composer=self._tutor_composer,
+            turn_type=turn_type,
+        )
+        prep["interactive_turn_type"] = turn_type
+        return prep
+
     async def __call__(self, state: AgentState) -> dict:
         """
         Process student query with interactive, step-by-step approach.
         """
-        query = state["query_en"]
+        prep = await self._run_interactive_prep(state)
+        tutor_input = prep.get("tutor_input")
+        query = (
+            tutor_input.query_for_react
+            if tutor_input
+            else state.get("effective_query")
+            or state.get("query_en")
+            or state.get("query", "")
+        )
         history = state.get("conversation_history", [])
+        system_extra = tutor_input.system_extra if tutor_input else ""
+        ctx_block = str(state.get("context_resolution_block") or "").strip()
+        if ctx_block:
+            system_extra = f"{system_extra}\n\n{ctx_block}".strip() if system_extra else ctx_block
+        turn_type: TurnType = prep.get("interactive_turn_type") or "opening"
 
         logger.info("Interactive Student Agent processing query: %s", query[:100])
 
-        # Get target language
         target_lang = state.get("language", "en")
 
-        # Stateless turn-type detection (opening / followup / confusion / meta)
-        # derived purely from history + current query. Drives a per-turn
-        # directive embedded in the system prompt for deterministic behavior
-        # on confusion / meta turns without any persisted state.
-        turn_type: TurnType = self._detect_turn_type(history, state.get("query") or query)
-        logger.info("Interactive Student Agent detected turn_type=%s", turn_type)
-
-        # Per-invocation prompt builder: do not assign self.react_agent.build_system_prompt —
-        # ReActAgent is shared across requests under FastAPI; mutation would race and leak
-        # turn_type/state between concurrent callers.
         def system_prompt_builder(
             q: str, session_meta: Optional[Dict[str, Any]]
         ) -> str:
@@ -407,18 +454,43 @@ HOW TO RESPOND:
             if not isinstance(subjects, list):
                 maybe_subjects = (session_meta or {}).get("subjects", [])
                 subjects = maybe_subjects if isinstance(maybe_subjects, list) else []
-            return self._build_interactive_system_prompt(
+            base = self._build_interactive_system_prompt(
                 q, subjects, target_lang, state, turn_type
             )
+            preferred_fmt = str(state.get("preferred_response_format") or "").strip().lower()
+            if preferred_fmt in {"bullets", "paragraph", "steps"}:
+                base += (
+                    f"\n\nResponse format preference (remembered): {preferred_fmt}. "
+                    "Follow it unless the student explicitly asks for a different format now."
+                )
+            if system_extra:
+                return f"{base}\n\n{system_extra}"
+            return base
 
         updates = {
             "response": "",
             "citations": [],
-            "llm_calls": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "is_correction": False
+            "llm_calls": int(prep.get("llm_calls", 0) or 0),
+            "input_tokens": int(prep.get("input_tokens", 0) or 0),
+            "output_tokens": int(prep.get("output_tokens", 0) or 0),
+            "is_correction": False,
+            "agent_findings": prep.get("agent_findings") or state.get("agent_findings") or [],
+            "interactive_turn_type": turn_type,
+            "image_inject_level": prep.get("image_inject_level", "none"),
+            "image_inject_block": prep.get("image_inject_block", ""),
+            "image_gate_reason": prep.get("image_gate_reason", ""),
+            "new_uploaded_image_records": prep.get("new_uploaded_image_records") or [],
+            "effective_query": prep.get("effective_query") or state.get("effective_query") or "",
         }
+        if prep.get("token_usage_by_model"):
+            updates["token_usage_by_model"] = prep["token_usage_by_model"]
+        if prep.get("usage_by_component"):
+            updates["usage_by_component"] = prep["usage_by_component"]
+        if prep.get("images_analyzed"):
+            updates["images_analyzed"] = prep["images_analyzed"]
+        if prep.get("aux_input_tokens"):
+            updates["aux_input_tokens"] = prep["aux_input_tokens"]
+            updates["aux_output_tokens"] = prep.get("aux_output_tokens", 0)
 
         # Set correction flag if validation results exist
         val_results = state.get("validation_results")
@@ -442,6 +514,13 @@ HOW TO RESPOND:
             
             if result and "answer" in result:
                 updates["response"] = result["answer"]
+                updates["agent_findings"] = publish(
+                    updates.get("agent_findings"),
+                    "interactive_student",
+                    "response_draft",
+                    "English draft for translation",
+                    {"answer_en": result["answer"][:500]},
+                )
                 
                 # Extract citations from reasoning chain
                 source_docs = state.get("documents", [])
@@ -456,6 +535,11 @@ HOW TO RESPOND:
                 updates["llm_calls"] = result.get("iterations", 0)
                 updates["input_tokens"] = result.get("input_tokens", 0)
                 updates["output_tokens"] = result.get("output_tokens", 0)
+                updates["token_usage_by_model"] = result.get("token_usage_by_model", {})
+                if result.get("usage_by_component"):
+                    updates["usage_by_component"] = result.get("usage_by_component")
+                if result.get("web_search_calls"):
+                    updates["web_search_calls"] = result.get("web_search_calls")
                 
                 # Separate primary LLM (Mini) tokens from total/aux (Nano) for breakdown tracking
                 updates["primary_input_tokens"] = result.get("input_tokens", 0)

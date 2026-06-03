@@ -2,9 +2,10 @@
 VidyaAI Token Usage Benchmark
 ==============================
 
-Runs two full multi-turn conversations against the deployed /chat API:
-  - Case 1: English-only (no translation overhead)
-  - Case 2: Hindi responses (translation node is triggered every turn)
+Runs multi-turn conversations against the deployed /chat API:
+  - Case 1: Standard mode (agent_mode=standard)
+  - Case 2: Interactive mode (agent_mode=interactive)
+  - Case 3: Interactive + image upload (vision costing)
 
 For each turn it records:
   - Input / Output / Total tokens (from the response body)
@@ -109,6 +110,24 @@ CONVERSATION_TURNS_EN: List[str] = [
     "Which of the topics we covered today do you think is the most important for a student to master first?",
 ]
 
+# Case 3: interactive + image (3 turns)
+MINIMAL_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+# Case 4: interactive image generation (Google Gemini; requires GEMINI_API_KEY)
+CASE4_TURNS: List[Dict[str, Any]] = [
+    {"query": "Draw a simple photosynthesis diagram with labeled steps.", "images": []},
+]
+
+CASE3_TURNS: List[Dict[str, Any]] = [
+    {"query": "What is photosynthesis in one sentence?", "images": []},
+    {
+        "query": "What do you see in this diagram? Describe it briefly.",
+        "images": [{"mime_type": "image/png", "data": MINIMAL_PNG_BASE64}],
+    },
+    {"query": "What did you see in the image from the previous step?", "images": []},
+]
+
 # Case 2: HINDI queries — language detector must identify Hindi for translation to fire.
 # The translation node reads state['language'] which is set from the DETECTED query language,
 # NOT from the request payload's 'language' field.
@@ -180,40 +199,37 @@ class TurnResult:
     latency_ms: float = 0.0
     response_preview: str = ""
     error: Optional[str] = None
-    embedding_tokens: int = AVG_EMBEDDING_TOKENS  # estimated per turn
+    embedding_tokens: int = 0
+    cost_usd_llm: float = 0.0
+    cost_usd_web_search: float = 0.0
+    cost_usd_vision: float = 0.0
+    cost_usd_background: float = 0.0
+    cost_usd_embedding: float = 0.0
+    cost_usd_total: float = 0.0
+    cost_by_component_usd: Dict[str, float] = field(default_factory=dict)
+    web_search_calls: int = 0
+    images_analyzed: int = 0
+    cost_usd_image_generation: float = 0.0
+    image_generation_calls: int = 0
+    image_generation_backend: str = ""
+    image_model_used: str = ""
+    generated_images_count: int = 0
 
     @property
     def grand_total_tokens(self) -> int:
-        return self.total_with_bg  # includes background summarisation
-
-    @property
-    def input_cost(self) -> float:
-        return self.input_tokens * GPT4O_MINI_INPUT_PRICE / 1_000_000
-
-    @property
-    def output_cost(self) -> float:
-        return self.output_tokens * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
-
-    @property
-    def bg_input_cost(self) -> float:
-        return self.bg_input_tokens * GPT4O_MINI_INPUT_PRICE / 1_000_000
-
-    @property
-    def bg_output_cost(self) -> float:
-        return self.bg_output_tokens * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
-
-    @property
-    def embedding_cost(self) -> float:
-        return self.embedding_tokens * EMBEDDING_PRICE / 1_000_000
+        return self.total_with_bg
 
     @property
     def total_cost(self) -> float:
+        """Prefer server-computed cost_usd_total when available."""
+        if self.cost_usd_total > 0:
+            return self.cost_usd_total
         return (
-            self.input_cost
-            + self.output_cost
-            + self.bg_input_cost
-            + self.bg_output_cost
-            + self.embedding_cost
+            self.input_tokens * GPT4O_MINI_INPUT_PRICE / 1_000_000
+            + self.output_tokens * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
+            + self.bg_input_tokens * GPT4O_MINI_INPUT_PRICE / 1_000_000
+            + self.bg_output_tokens * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
+            + self.embedding_tokens * EMBEDDING_PRICE / 1_000_000
         )
 
 
@@ -221,6 +237,7 @@ class TurnResult:
 class CaseResult:
     name: str
     language: str
+    agent_mode: str = "standard"
     turns: List[TurnResult] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: f"benchmark-{uuid.uuid4().hex[:8]}")
 
@@ -261,6 +278,8 @@ async def send_chat(
     session_id: str,
     query: str,
     language: str,
+    agent_mode: str,
+    images: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     payload = {
         "user_session_id": session_id,
@@ -268,9 +287,11 @@ async def send_chat(
         "user_type": USER_TYPE,
         "query": query,
         "language": language,
-        "agent_mode": "standard",
+        "agent_mode": agent_mode,
         "student_grade": STUDENT_GRADE,
     }
+    if images:
+        payload["images"] = images
     t0 = time.perf_counter()
     r = await client.post(CHAT_URL, json=payload, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     latency_ms = (time.perf_counter() - t0) * 1000
@@ -286,19 +307,31 @@ async def send_chat(
 async def run_case(
     client: httpx.AsyncClient,
     case: CaseResult,
-    turns: List[str],
+    turns: List[str] | List[Dict[str, Any]],
 ) -> CaseResult:
     print(f"\n{'═' * 100}")
-    print(f"  CASE: {case.name}  │  Language: {case.language.upper()}  │  Session: {case.session_id}")
+    print(
+        f"  CASE: {case.name}  │  Language: {case.language.upper()}  │  "
+        f"Mode: {case.agent_mode}  │  Session: {case.session_id}"
+    )
     print(f"{'═' * 100}\n")
 
-    for i, query in enumerate(turns, start=1):
+    for i, turn in enumerate(turns, start=1):
+        if isinstance(turn, dict):
+            query = str(turn.get("query", ""))
+            images = turn.get("images") or []
+        else:
+            query = str(turn)
+            images = []
+
         print(f"  Turn {i:02d}/{len(turns)}: {clamp_str(query, 80)}")
 
         result = TurnResult(turn=i, query=query)
 
         try:
-            data = await send_chat(client, case.session_id, query, case.language)
+            data = await send_chat(
+                client, case.session_id, query, case.language, case.agent_mode, images=images or None
+            )
             result.input_tokens    = data.get("input_tokens", 0)
             result.output_tokens   = data.get("output_tokens", 0)
             result.total_tokens    = data.get("total_tokens", 0)
@@ -311,10 +344,37 @@ async def run_case(
             result.language        = data.get("language", case.language)
             result.latency_ms      = data.get("_latency_ms", 0.0)
             result.response_preview= clamp_str(data.get("message", ""), 120)
+            result.embedding_tokens = data.get("embedding_tokens", 0)
+            result.cost_usd_llm = float(data.get("cost_usd_llm", 0) or 0)
+            result.cost_usd_web_search = float(data.get("cost_usd_web_search", 0) or 0)
+            result.cost_usd_vision = float(data.get("cost_usd_vision", 0) or 0)
+            result.cost_usd_background = float(data.get("cost_usd_background", 0) or 0)
+            result.cost_usd_embedding = float(data.get("cost_usd_embedding", 0) or 0)
+            result.cost_usd_total = float(data.get("cost_usd_total", 0) or 0)
+            result.cost_by_component_usd = data.get("cost_by_component_usd") or {}
+            result.web_search_calls = int(data.get("web_search_calls", 0) or 0)
+            result.images_analyzed = int(data.get("images_analyzed", 0) or 0)
+            result.cost_usd_image_generation = float(
+                data.get("cost_usd_image_generation", 0) or 0
+            )
+            result.image_generation_calls = int(
+                data.get("image_generation_calls", 0) or 0
+            )
+            result.image_generation_backend = str(
+                data.get("image_generation_backend", "") or ""
+            )
+            result.image_model_used = str(data.get("image_model_used", "") or "")
+            gen_imgs = data.get("generated_images") or []
+            result.generated_images_count = len(gen_imgs)
 
             print(
                 f"         ✓  in={result.input_tokens:,} out={result.output_tokens:,} "
                 f"bg={result.bg_total_tokens:,}  total={result.total_with_bg:,}  "
+                f"web=${result.cost_usd_web_search:.6f} vision=${result.cost_usd_vision:.6f} "
+                f"gen=${result.cost_usd_image_generation:.6f} "
+                f"web_calls={result.web_search_calls} imgs={result.images_analyzed} "
+                f"gen_calls={result.image_generation_calls} backend={result.image_generation_backend} "
+                f"gen_imgs={result.generated_images_count} "
                 f"latency={result.latency_ms/1000:.1f}s  cost=${result.total_cost:.6f}"
             )
             print(f"         Preview: {result.response_preview}\n")
@@ -350,27 +410,25 @@ def print_case_report(case: CaseResult) -> None:
     total_turns    = len(success)
     avg_latency    = (sum(t.latency_ms for t in success) / total_turns) if total_turns else 0
 
-    cost_input   = total_input    * GPT4O_MINI_INPUT_PRICE  / 1_000_000
-    cost_output  = total_output   * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
-    cost_bg_in   = total_bg_in   * GPT4O_MINI_INPUT_PRICE  / 1_000_000
-    cost_bg_out  = total_bg_out  * GPT4O_MINI_OUTPUT_PRICE / 1_000_000
-    cost_embed   = total_embed   * EMBEDDING_PRICE          / 1_000_000
-    total_cost   = cost_input + cost_output + cost_bg_in + cost_bg_out + cost_embed
+    total_cost = sum(t.cost_usd_total for t in success) or sum(t.total_cost for t in success)
+    total_web = sum(t.cost_usd_web_search for t in success)
+    total_vision = sum(t.cost_usd_vision for t in success)
+    total_web_calls = sum(t.web_search_calls for t in success)
 
     col = {
-        "turn":     5, "query": 44, "in": 8, "out": 8, "bg": 7,
-        "total": 8, "llm": 4, "lat": 7, "cost": 10, "quality": 20,
+        "turn": 5, "query": 36, "in": 8, "out": 8, "web": 8, "vis": 8,
+        "cost": 10, "lat": 7, "llm": 4,
     }
 
     header = (
         f"{'#':>{col['turn']}} │ {'Query':<{col['query']}} │ "
-        f"{'Input':>{col['in']}} │ {'Output':>{col['out']}} │ {'BG':>{col['bg']}} │ "
-        f"{'Total':>{col['total']}} │ {'LLM':>{col['llm']}} │ "
-        f"{'Lat(s)':>{col['lat']}} │ {'Cost($)':>{col['cost']}} │ Response Preview"
+        f"{'Input':>{col['in']}} │ {'Output':>{col['out']}} │ "
+        f"{'Web$':>{col['web']}} │ {'Vis$':>{col['vis']}} │ "
+        f"{'Cost($)':>{col['cost']}} │ {'Lat(s)':>{col['lat']}} │ Response Preview"
     )
 
     print(f"\n{divider('═')}")
-    print(f"  RESULTS: {case.name}  │  Language: {case.language.upper()}")
+    print(f"  RESULTS: {case.name}  │  Language: {case.language.upper()}  │  Mode: {case.agent_mode}")
     print(divider('─'))
     print(header)
     print(divider('─'))
@@ -379,27 +437,30 @@ def print_case_report(case: CaseResult) -> None:
         if t.error:
             print(
                 f"  {t.turn:>{col['turn']}} │ {clamp_str(t.query, col['query']):<{col['query']}} │ "
-                f"{'ERROR':<{col['in'] + col['out'] + col['bg'] + col['total'] + 12}} │ {t.error[:40]}"
+                f"{'ERROR':<50} │ {t.error[:40]}"
             )
         else:
             print(
                 f"  {t.turn:>{col['turn']}} │ {clamp_str(t.query, col['query']):<{col['query']}} │ "
                 f"  {t.input_tokens:>{col['in']},} │ {t.output_tokens:>{col['out']},} │ "
-                f"{t.bg_total_tokens:>{col['bg']},} │ {t.total_with_bg:>{col['total']},} │ "
-                f"  {t.llm_calls:>{col['llm']}} │ {t.latency_ms/1000:>{col['lat']}.1f} │ "
-                f"  {t.total_cost:>{col['cost']}.6f} │ {clamp_str(t.response_preview, 45)}"
+                f"  {t.cost_usd_web_search:>{col['web']}.6f} │ {t.cost_usd_vision:>{col['vis']}.6f} │ "
+                f"  {t.total_cost:>{col['cost']}.6f} │ {t.latency_ms/1000:>{col['lat']}.1f} │ "
+                f"{clamp_str(t.response_preview, 40)}"
             )
 
     print(divider('─'))
     print(f"\n  TOKEN SUMMARY")
-    print(f"  {'Main Input Tokens:':<35} {total_input:>10,}   → ${cost_input:.6f}")
-    print(f"  {'Main Output Tokens:':<35} {total_output:>10,}   → ${cost_output:.6f}")
-    print(f"  {'Background Input Tokens:':<35} {total_bg_in:>10,}   → ${cost_bg_in:.6f}")
-    print(f"  {'Background Output Tokens:':<35} {total_bg_out:>10,}   → ${cost_bg_out:.6f}")
-    print(f"  {'Estimated Embedding Tokens:':<35} {total_embed:>10,}   → ${cost_embed:.6f}")
+    print(f"  {'Main Input Tokens:':<35} {total_input:>10,}")
+    print(f"  {'Main Output Tokens:':<35} {total_output:>10,}")
+    print(f"  {'Background Tokens:':<35} {total_bg_in + total_bg_out:>10,}")
+    print(f"  {'Embedding Tokens (API):':<35} {total_embed:>10,}")
     print(divider('─'))
-    print(f"  {'TOTAL TOKENS (incl. BG + embed):':<35} {grand_total:>10,}")
-    print(f"  {'TOTAL COST (this session):':<35} ${total_cost:.6f}")
+    print(f"  {'TOTAL TOKENS (incl. BG):':<35} {grand_total:>10,}")
+    print(f"  {'Web search cost (API):':<35} ${total_web:.6f}  ({total_web_calls} calls)")
+    print(f"  {'Vision cost (API):':<35} ${total_vision:.6f}")
+    print(f"  {'TOTAL COST (API, this session):':<35} ${total_cost:.6f}")
+    if total_turns:
+        print(f"  {'AVG COST PER QUERY:':<35} ${(total_cost / total_turns):.6f}")
     print(f"  {'Avg Latency per Turn:':<35} {avg_latency/1000:.2f}s")
     print(f"  {'Failed Turns:':<35} {len(failed)}")
     print(divider('═'))
@@ -452,6 +513,7 @@ def save_json_report(cases: List[CaseResult], filename: str) -> None:
         case_data: Dict[str, Any] = {
             "name": case.name,
             "language": case.language,
+            "agent_mode": case.agent_mode,
             "session_id": case.session_id,
             "turns": [],
         }
@@ -471,6 +533,20 @@ def save_json_report(cases: List[CaseResult], filename: str) -> None:
                 "intent": t.intent,
                 "language": t.language,
                 "latency_ms": round(t.latency_ms, 2),
+                "cost_usd_llm": t.cost_usd_llm,
+                "cost_usd_web_search": t.cost_usd_web_search,
+                "cost_usd_vision": t.cost_usd_vision,
+                "cost_usd_background": t.cost_usd_background,
+                "cost_usd_embedding": t.cost_usd_embedding,
+                "cost_usd_total": t.cost_usd_total,
+                "cost_by_component_usd": t.cost_by_component_usd,
+                "web_search_calls": t.web_search_calls,
+                "images_analyzed": t.images_analyzed,
+                "cost_usd_image_generation": t.cost_usd_image_generation,
+                "image_generation_calls": t.image_generation_calls,
+                "image_generation_backend": t.image_generation_backend,
+                "image_model_used": t.image_model_used,
+                "generated_images_count": t.generated_images_count,
                 "total_cost_usd": round(t.total_cost, 8),
                 "response_preview": t.response_preview,
                 "error": t.error,
@@ -505,39 +581,57 @@ async def main() -> None:
             print("\n  ✗ Cannot proceed — server is not reachable. Aborting.")
             sys.exit(1)
 
-        # ── Case 1: English Only ──────────────────────────────────────────────────
+        # ── Case 1: Standard mode ─────────────────────────────────────────────────
         case1 = CaseResult(
-            name="Case 1 — English Only",
+            name="Case 1 — Standard Mode (English)",
             language="en",
+            agent_mode="standard",
         )
         await run_case(client, case1, CONVERSATION_TURNS_EN)
 
-        # ── Case 2: Hindi Translation ─────────────────────────────────────────────
-        # IMPORTANT: Queries are sent IN HINDI so the fastText language detector
-        # correctly identifies the language as 'hi' and triggers the translation node.
-        # Sending English text with language='hi' bypasses translation entirely because
-        # the detector overrides the payload's language field.
+        # ── Case 2: Interactive mode ──────────────────────────────────────────────
         case2 = CaseResult(
-            name="Case 2 — Hindi Translation (Actual Hindi Queries)",
-            language="hi",
+            name="Case 2 — Interactive Mode (English)",
+            language="en",
+            agent_mode="interactive",
         )
-        await run_case(client, case2, CONVERSATION_TURNS_HI)
+        await run_case(client, case2, CONVERSATION_TURNS_EN)
+
+        # ── Case 3: Interactive + image ───────────────────────────────────────────
+        case3 = CaseResult(
+            name="Case 3 — Interactive + Image (English)",
+            language="en",
+            agent_mode="interactive",
+        )
+        await run_case(client, case3, CASE3_TURNS)
+
+        # ── Case 4: Image generation ──────────────────────────────────────────────
+        case4 = CaseResult(
+            name="Case 4 — Image Generation (interactive)",
+            language="en",
+            agent_mode="interactive",
+        )
+        await run_case(client, case4, CASE4_TURNS)
 
     # ── Print Full Reports ────────────────────────────────────────────────────
     cost1 = print_case_report(case1)
     cost2 = print_case_report(case2)
+    cost3 = print_case_report(case3)
+    cost4 = print_case_report(case4)
 
     # ── Monthly Projection ────────────────────────────────────────────────────
     print_monthly_projection(
         [
             (case1.name, cost1),
             (case2.name, cost2),
+            (case3.name, cost3),
+            (case4.name, cost4),
         ]
     )
 
     # ── Save to JSON ──────────────────────────────────────────────────────────
     out_file = f"tests/benchmark_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    save_json_report([case1, case2], out_file)
+    save_json_report([case1, case2, case3, case4], out_file)
 
     print("\n  ✓ Benchmark complete.\n")
 

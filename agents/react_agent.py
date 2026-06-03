@@ -11,12 +11,32 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from config import settings
+from services.costing import (
+    merge_usage_by_component,
+    parse_web_search_result,
+    patch_component_usage,
+)
+from services.prompt_policy import GLOBAL_GUARDRAIL_RULES
 from state import ConversationTurn
 from tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 FALLBACK_MESSAGE = "I couldn't find a definitive answer in the curriculum materials. Could you please provide more details or rephrase your question?"
+
+
+def _add_usage(
+    usage_map: Dict[str, Dict[str, int]],
+    model_name: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    if not model_name:
+        return
+    row = usage_map.setdefault(model_name, {"input": 0, "output": 0})
+    row["input"] += int(input_tokens or 0)
+    row["output"] += int(output_tokens or 0)
+
 
 class ReActAgent:
     """
@@ -123,6 +143,11 @@ class ReActAgent:
         
         total_input_tokens = 0
         total_output_tokens = 0
+        token_usage_by_model: Dict[str, Dict[str, int]] = {}
+        usage_by_component: Dict[str, Dict[str, Any]] = {}
+        web_search_calls = 0
+        main_model = getattr(self.llm, "model_name", None) or "unknown"
+        web_search_model = settings.web_search_model_name or "gpt-4o-mini"
         
         # Inject prefilled observations (Proactive RAG)
         if prefilled_observations:
@@ -164,6 +189,8 @@ class ReActAgent:
             # Add simulated calls to history
             messages.append(AIMessage(content="", tool_calls=tool_calls))
             messages.extend(obs_messages)
+
+        prefilled_tool_names = {str((row or {}).get("tool") or "") for row in (prefilled_observations or [])}
         
         for iteration in range(1, self.max_iterations + 1):
             logger.info("Agent iteration %d/%d", iteration, self.max_iterations)
@@ -179,6 +206,13 @@ class ReActAgent:
                  o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
                  total_input_tokens += i_tokens
                  total_output_tokens += o_tokens
+                 _add_usage(token_usage_by_model, main_model, i_tokens, o_tokens)
+                 usage_by_component = merge_usage_by_component(
+                     usage_by_component,
+                     patch_component_usage("chat", main_model, i_tokens, o_tokens).get(
+                         "usage_by_component", {}
+                     ),
+                 )
                  logger.info(
                      "[TOKEN_USAGE] ReActAgent (Iteration %d): input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
                      iteration,
@@ -202,6 +236,9 @@ class ReActAgent:
                     "iterations": iteration,
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,
+                    "token_usage_by_model": token_usage_by_model,
+                    "usage_by_component": usage_by_component,
+                    "web_search_calls": web_search_calls,
                 }
             
             # 3. Execute tools
@@ -231,6 +268,23 @@ class ReActAgent:
                         return "ERROR: Web search cannot be used in parallel with 'retrieve_documents'. Please review the results of the curriculum search below first. If they are insufficient, you may use 'web_search' in the NEXT turn."
                     
                     tool_coroutines.append(_postpone_web_search())
+                    tool_metadatas.append({"name": tool_name, "args": tool_args, "id": tool_id})
+                    continue
+
+                # Avoid redundant retrieval/web calls when prefilled context already exists.
+                if prefilled_tool_names and tool_name in {"retrieve_documents", "web_search"}:
+                    logger.info(
+                        "Skipping redundant %s call because prefilled observations exist.",
+                        tool_name,
+                    )
+
+                    async def _skip_redundant_tool(name: str = tool_name) -> str:
+                        return (
+                            f"SKIPPED_REDUNDANT_{name.upper()}: "
+                            "Use existing context and answer directly unless user explicitly asks for fresh lookup."
+                        )
+
+                    tool_coroutines.append(_skip_redundant_tool())
                     tool_metadatas.append({"name": tool_name, "args": tool_args, "id": tool_id})
                     continue
 
@@ -267,11 +321,27 @@ class ReActAgent:
                 
                 # Process results and update state
                 for meta, observation in zip(tool_metadatas, results):
-                    # Handle tuple results (result_str, i_tokens, o_tokens)
-                    if isinstance(observation, tuple) and len(observation) == 3:
-                        observation_str, i_t, o_t = observation
+                    if meta["name"] == "web_search":
+                        observation_str, i_t, o_t, billable = parse_web_search_result(
+                            observation
+                        )
                         total_input_tokens += i_t
                         total_output_tokens += o_t
+                        _add_usage(token_usage_by_model, web_search_model, i_t, o_t)
+                        usage_by_component = merge_usage_by_component(
+                            usage_by_component,
+                            patch_component_usage(
+                                "web_search",
+                                web_search_model,
+                                i_t,
+                                o_t,
+                                billable_web_call=billable,
+                            ).get("usage_by_component", {}),
+                        )
+                        if billable:
+                            web_search_calls += 1
+                    elif isinstance(observation, tuple) and len(observation) >= 3:
+                        observation_str = str(observation[0])
                     else:
                         observation_str = str(observation)
 
@@ -304,6 +374,7 @@ class ReActAgent:
             synthesis_prompt = (
                 "You reached the maximum number of thought steps. Based on the information you collected so far, "
                 "provide the most complete answer possible. If you still don't have enough info, be honest but helpful."
+                f"{GLOBAL_GUARDRAIL_RULES}"
             )
             messages.append(HumanMessage(content=synthesis_prompt))
             final_resp = await self.llm.ainvoke(messages, config={"max_tokens": settings.main_response_tokens})
@@ -315,6 +386,13 @@ class ReActAgent:
                  o_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
                  total_input_tokens += i_tokens
                  total_output_tokens += o_tokens
+                 _add_usage(token_usage_by_model, main_model, i_tokens, o_tokens)
+                 usage_by_component = merge_usage_by_component(
+                     usage_by_component,
+                     patch_component_usage("chat", main_model, i_tokens, o_tokens).get(
+                         "usage_by_component", {}
+                     ),
+                 )
                  logger.info(
                      "[TOKEN_USAGE] ReActAgent (Synthesis): input_tokens=%s, output_tokens=%s, total_tokens=%s, model=%s",
                      i_tokens,
@@ -329,6 +407,9 @@ class ReActAgent:
                 "iterations": self.max_iterations,
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
+                "token_usage_by_model": token_usage_by_model,
+                "usage_by_component": usage_by_component,
+                "web_search_calls": web_search_calls,
             }
 
         return {
@@ -337,6 +418,9 @@ class ReActAgent:
             "iterations": self.max_iterations,
             "input_tokens": total_input_tokens,
             "output_tokens": total_output_tokens,
+            "token_usage_by_model": token_usage_by_model,
+            "usage_by_component": usage_by_component,
+            "web_search_calls": web_search_calls,
         }
 
     def _build_messages(
@@ -432,6 +516,7 @@ class ReActAgent:
                 "5. Do NOT include any source labels or citations (e.g., [Source 1]) in your text response. Citations are handled automatically.\n"
                 "6. No general knowledge. If not in docs, say 'I don't know'.\n"
                 "7. Use MathJax for formulas (\\(x\\) inline, \\[y\\] block)."
+                f"{GLOBAL_GUARDRAIL_RULES}"
                 f"{context_str}"
                 f"{summary_section}"
             )

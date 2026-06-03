@@ -52,7 +52,28 @@ class LanguageDetector:
     )
     _AMBIGUOUS_SHORT_TEXT_MAX_WORDS = 3
     _AMBIGUOUS_SHORT_TEXT_MAX_CHARS = 24
-    _LOW_CONFIDENCE_THRESHOLD = 0.70
+    _LOW_CONFIDENCE_THRESHOLD = 0.80
+
+    @staticmethod
+    def resolve_response_language(
+        detected: str,
+        confidence: float,
+        *,
+        min_confidence: float = 0.80,
+        fallback: str = "en",
+    ) -> str:
+        """
+        Pick the language used for replies.
+
+        Non-English detections below ``min_confidence`` fall back to English so
+        short/ambiguous Latin text (e.g. "i dont know any") is not mis-localized.
+        """
+        code = (detected or fallback).strip().lower() or fallback
+        if code == fallback:
+            return fallback
+        if float(confidence or 0.0) < float(min_confidence):
+            return fallback
+        return code
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -133,11 +154,14 @@ class LanguageDetector:
         Returns 'en' as fallback.
         """
         detected, confidence = self.detect_language_with_confidence(text)
-        # Keep deterministic fallback for short low-confidence snippets.
         if (
             detected != "en"
             and self._is_short_english_chat(text)
             and confidence < self._LOW_CONFIDENCE_THRESHOLD
         ):
             return "en"
-        return detected
+        return self.resolve_response_language(
+            detected,
+            confidence,
+            min_confidence=self._LOW_CONFIDENCE_THRESHOLD,
+        )

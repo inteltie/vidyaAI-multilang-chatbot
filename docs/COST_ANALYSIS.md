@@ -27,7 +27,49 @@ A **token** is roughly:
 | Query Classifier | `gpt-4o-mini` | $0.15 / 1M tokens | $0.60 / 1M tokens |
 | Embeddings (RAG) | `text-embedding-3-large` | **$0.13 / 1M tokens** | *(input only)* |
 
-> All LLM tasks use the **same model** (`gpt-4o-mini`), so costs are pooled together. The embedding model is used separately only for Pinecone vector search (RAG retrieval).
+> Chat, validation, and translation use `gpt-4o-mini` token rates. Costs are reported **by component** in the API (`cost_by_component_usd`).
+
+### Web search tool (`web_search_preview`)
+
+| Item | Rate (non-reasoning, e.g. `gpt-4o-mini`) |
+|:---|:---|
+| Tool invocation | **$25 / 1,000 calls** (~$0.025 per billable call) |
+| Search content tokens | **Free** (usage may still appear in logs; not double-billed) |
+
+Cache hits do not increment `web_search_calls`. Configure via `WEB_SEARCH_FEE_PER_1K_CALLS_USD` and `WEB_SEARCH_CONTENT_TOKENS_BILLED`.
+
+### Interactive images (vision)
+
+| Item | Rate |
+|:---|:---|
+| `ImageAnalyzerAgent` (gpt-4o-mini vision) | $0.15 / 1M input, $0.60 / 1M output |
+| `ImageContextGateAgent` (nano, ambiguous only) | $0.10 / 1M input, $0.40 / 1M output |
+
+Reported separately as `cost_usd_vision` (analyzer) and included in `cost_usd_llm` for the nano gate.
+
+**Vision detail:** Set `VISION_DETAIL=high` (default) for dense diagrams and small labels on `gpt-4o-mini`. Use `low` only for coarse scene description to save tokens.
+
+### Interactive image generation (Google Gemini)
+
+| Item | Value |
+|:---|:---|
+| Provider | Google Gemini API (`google-genai` SDK) |
+| Model | `gemini-2.5-flash-image` (`GOOGLE_IMAGE_MODEL`) |
+| API key | `GEMINI_API_KEY` |
+| Approx. cost | `IMAGE_GENERATION_FEE_PER_CALL_USD` default **$0.039**/image |
+
+**Analyze** uploaded images still uses OpenAI vision (`cost_usd_vision` on `ImageAnalyzerAgent`).
+
+Only when `agent_mode=interactive` and query matches generate intent (e.g. “draw a photosynthesis diagram”). Response includes `generated_images[]` with **base64** (`data`) and a persistent **URL** (`url`), plus `image_id`. Files are stored under `GENERATED_IMAGE_DIR` (default `./data/generated`) and served at `{PUBLIC_BASE_URL}/generated/{session_id}/{image_id}.png`. Metadata is saved in Mongo per session. On reload, `GET /sessions/{user_session_id}/generated-images?user_id=...` returns URLs only (no base64). Routed via `image_generation_agent` (skips RAG/ReAct).
+
+**Env:** `GENERATED_IMAGE_DIR`, `PUBLIC_BASE_URL` (e.g. `http://localhost:8001`), `MAX_REMEMBERED_GENERATED_IMAGES`. Docker: mount `./data/generated` (see `docker-compose.yml`).
+
+### API cost fields (per `/chat` response)
+
+- `cost_usd_llm`, `cost_usd_web_search`, `cost_usd_vision`, `cost_usd_image_generation`, `cost_usd_background`, `cost_usd_embedding`, `cost_usd_total`
+- `web_search_calls`, `images_analyzed`, `image_generation_calls`, `generated_images`, `image_generation_backend`, `image_model_used`, `cost_by_component_usd`
+
+Run `tests/benchmark_cost.py` after deploy (Case 4 — image generation). Set `GEMINI_API_KEY` in `.env` before testing.
 
 ---
 

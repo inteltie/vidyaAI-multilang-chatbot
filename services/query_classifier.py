@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class QueryClassification(BaseModel):
     """Classification result for a user query."""
-    query_type: Literal["conversational", "curriculum_specific"] = Field(
+    query_type: Literal["conversational", "curriculum_specific", "image_generation"] = Field(
         description="The category of the query."
     )
     translated_query: str = Field(
@@ -161,6 +161,12 @@ class QueryClassifier:
 
         # 2. Subject-keyword fast path — catches 'i need ... for/about <subject>'
         #    and any query that contains an explicit educational subject noun.
+        # Skip when the user is asking to draw/generate a diagram (handled by image_generation flow).
+        from services.image_modality_policy import looks_like_image_generation_query
+
+        if looks_like_image_generation_query(query):
+            return None
+
         subject_hits = [k for k in self._SUBJECT_KEYWORDS if k in query_lower]
         if subject_hits:
             detected_subject = subject_hits[0].capitalize()

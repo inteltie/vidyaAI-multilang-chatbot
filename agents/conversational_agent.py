@@ -8,6 +8,12 @@ from langchain_openai import ChatOpenAI
 from state import AgentState
 from config import settings
 from tools.web_search_tool import WebSearchTool
+from services.costing import merge_patches, parse_web_search_result, patch_component_usage
+from services.prompt_policy import (
+    GLOBAL_GUARDRAIL_RULES,
+    IDENTITY_BLURB,
+    is_identity_or_tech_question,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +130,27 @@ class ConversationalAgent:
         q = (text or "").lower()
         return any(phrase in q for phrase in ["solved", "clear now", "got it", "understood"])
 
+    @staticmethod
+    def _looks_like_no_more_questions(text: str) -> bool:
+        q = re.sub(r"\s+", " ", (text or "").lower()).strip()
+        phrases = (
+            "no further questions",
+            "i have no further questions",
+            "no more questions",
+            "i have no more questions",
+            "that's all",
+            "thats all",
+            "that is all",
+            "nothing else",
+            "no questions",
+            "all good now",
+            "all clear now",
+            "we can stop here",
+            "lets stop here",
+            "let's stop here",
+        )
+        return any(phrase in q for phrase in phrases)
+
     @classmethod
     def _is_informational_conversational(cls, text: str) -> bool:
         if cls._looks_like_greeting(text):
@@ -135,6 +162,8 @@ class ConversationalAgent:
         if cls._looks_like_goodbye(text):
             return False
         if cls._looks_like_completion(text):
+            return False
+        if cls._looks_like_no_more_questions(text):
             return False
         tokens = cls._normalize_chat_token(text).split()
         filtered_tokens = [tok for tok in tokens if re.search(r"[a-zA-Z0-9]", tok)]
@@ -225,19 +254,27 @@ class ConversationalAgent:
             updates["response"] = f"{prefix}Goodbye! Happy learning! 📚"
         elif self._looks_like_completion(raw_query):
             updates["response"] = f"{prefix}Great! I'm here whenever you need help with your studies. Is there anything else you'd like to know?"
+        elif self._looks_like_no_more_questions(raw_query):
+            updates["response"] = f"{prefix}Great work today. I am here whenever you want to continue."
+        elif is_identity_or_tech_question(raw_query):
+            # Identity / underlying-technology questions: respond with the branded
+            # blurb and never disclose internals or run a web search.
+            updates["response"] = IDENTITY_BLURB
         elif self._is_informational_conversational(raw_query):
             # Conversational informational path: web-backed + date-grounded.
             today_iso = datetime.now(timezone.utc).date().isoformat()
             web_tool = WebSearchTool()
             try:
-                web_observation, web_i_tokens, web_o_tokens = await web_tool.execute(query=raw_query)
+                web_observation, web_i_tokens, web_o_tokens, web_billable = (
+                    await web_tool.execute(query=raw_query)
+                )
             except Exception as exc:
                 logger.error(
                     "WebSearchTool failed for raw_query=%r with error=%s",
                     raw_query,
                     exc,
                 )
-                web_observation, web_i_tokens, web_o_tokens = "", 0, 0
+                web_observation, web_i_tokens, web_o_tokens, web_billable = "", 0, 0, False
             prompt = (
                 f"You are Vidya, a friendly educational assistant. "
                 f"Today is {today_iso} (UTC). "
@@ -249,6 +286,7 @@ class ConversationalAgent:
                 "- Do not add a greeting.\n"
                 "- Keep response practical and easy to understand.\n"
                 "- Keep answer under 120 words unless user explicitly asks for detail.\n"
+                f"{GLOBAL_GUARDRAIL_RULES}"
             )
             max_tokens = min(settings.main_response_tokens, 180)
             resp = await self._llm.ainvoke(prompt, config={"max_tokens": max_tokens})
@@ -262,6 +300,19 @@ class ConversationalAgent:
             updates["primary_output_tokens"] = o_tokens
             updates["aux_input_tokens"] = web_i_tokens
             updates["aux_output_tokens"] = web_o_tokens
+            web_model = settings.web_search_model_name or "gpt-4o-mini"
+            updates.update(
+                merge_patches(
+                    patch_component_usage("chat", self._llm.model_name, i_tokens, o_tokens),
+                    patch_component_usage(
+                        "web_search",
+                        web_model,
+                        web_i_tokens,
+                        web_o_tokens,
+                        billable_web_call=web_billable,
+                    ),
+                )
+            )
             updates["llm_calls"] = 1
         else:
             updates["response"] = "Please share your question in one line, and I will help."

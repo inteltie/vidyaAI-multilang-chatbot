@@ -7,8 +7,11 @@ import re
 from typing import Any, Dict
 from time import perf_counter
 
+from config import settings
 from services.query_classifier import QueryClassifier, QueryClassification
 from services.language_detector import LanguageDetector
+from services.agent_findings import publish
+from services.prompt_policy import detect_abuse
 from state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -22,10 +25,13 @@ class AnalyzeQueryNode:
     into a single step/LLM call.
     """
 
-    def __init__(self, classifier: QueryClassifier, detector: LanguageDetector, retriever: RetrieverService | None = None) -> None:
+    def __init__(self, classifier: QueryClassifier, detector: LanguageDetector, retriever: RetrieverService | None = None, understanding=None) -> None:
         self._classifier = classifier
         self._detector = detector
         self._retriever = retriever
+        # ``understanding`` is retained for constructor compatibility; the LLM
+        # understanding/planning now runs in OrchestratorNode (orchestrate_turn).
+        self._understanding = understanding
 
     # Pure greetings that should NEVER be reclassified as interactive follow-ups,
     # even mid-Socratic flow. Acknowledgments like "yes/ok/idk/hmm" are NOT here
@@ -34,6 +40,28 @@ class AnalyzeQueryNode:
         "hi", "helo", "hey", "hello", "namaste", "नमस्ते", "हेलो",
         "bye", "goodbye", "godbye",
     }
+    _CLOSURE_TOKENS = {
+        "no further questions",
+        "i have no further questions",
+        "no more questions",
+        "i have no more questions",
+        "no questions",
+        "thats all",
+        "that's all",
+        "that is all",
+        "nothing else",
+        "all good now",
+        "all clear now",
+        "lets stop here",
+        "let's stop here",
+        "we can stop here",
+    }
+
+    @classmethod
+    def _is_closure_utterance(cls, query: str) -> bool:
+        q_norm = re.sub(r"[^\w\s']", " ", (query or "").lower()).strip()
+        q_norm = re.sub(r"\s+", " ", q_norm)
+        return any(token in q_norm for token in cls._CLOSURE_TOKENS)
 
     @classmethod
     def _is_interactive_followup(cls, state: dict, query: str) -> bool:
@@ -87,6 +115,8 @@ class AnalyzeQueryNode:
         q_collapsed = re.sub(r"(.)\1+", r"\1", q_norm)
         words = q_collapsed.split()
         if words and all(w in cls._PURE_GREETING_TOKENS for w in words):
+            return False
+        if cls._is_closure_utterance(query):
             return False
 
         return True
@@ -200,220 +230,227 @@ class AnalyzeQueryNode:
         if not prefs:
             return None
         pref_text = str(prefs).lower()
-        if "english" in pref_text:
-            return "en"
+        if "preferred_response_language:" in pref_text:
+            match = re.search(r"preferred_response_language:\s*([a-z]{2})", pref_text)
+            if match:
+                return match.group(1)
+        lang_map = {
+            "english": "en",
+            "hindi": "hi",
+            "marathi": "mr",
+            "japanese": "ja",
+            "spanish": "es",
+            "french": "fr",
+            "german": "de",
+            "norwegian": "no",
+            "swedish": "sv",
+        }
+        for name, code in lang_map.items():
+            if name in pref_text:
+                return code
         return None
 
     async def __call__(self, state: AgentState) -> dict:
         start = perf_counter()
         updates = {
             "input_tokens": 0,
-            "output_tokens": 0
+            "output_tokens": 0,
+            "token_usage_by_model": {},
         }
-        
-        query = state["query"]
+
+        query = state.get("query", "") or ""
+        has_images = bool(state.get("has_images") or (state.get("images") or []))
         history = state.get("conversation_history", [])
         user_session_id = state.get("user_session_id")
         clarification_attempts = int(state.get("context_gathering_attempts", 0) or 0)
-        warn_logger = getattr(getattr(self, "_logger", None), "warning", logger.warning)
-        detect_time_sensitive = getattr(self._classifier, "detect_time_sensitive_query", None)
-        detect_current_affairs = getattr(self._classifier, "detect_current_affairs_query", None)
-        if callable(detect_time_sensitive):
-            try:
-                is_time_sensitive_query = bool(detect_time_sensitive(query))
-            except Exception as exc:
-                warn_logger("detect_time_sensitive_query failed for query=%r: %s", query, exc)
-                is_time_sensitive_query = False
-        else:
-            is_time_sensitive_query = False
 
-        if callable(detect_current_affairs):
+        # The Turn Orchestrator (orchestrate_turn) already produced an authoritative,
+        # context-aware plan. This node performs deterministic ENRICHMENT only:
+        # language resolution, memory/intro handling, interactive-followup safety,
+        # session-metadata extraction, caching and findings. It does NOT re-classify
+        # intent — query_type/query_en/subjects come from the plan unless a hard
+        # deterministic rule must override them.
+        plan = state.get("turn_plan") or {}
+
+        # Normalize runner-injected context wrappers into a stable input.
+        if "\nCurrent question:" in query and query.strip().lower().startswith("context:"):
             try:
-                is_current_affairs_query = bool(detect_current_affairs(query))
-            except Exception as exc:
-                warn_logger("detect_current_affairs_query failed for query=%r: %s", query, exc)
-                is_current_affairs_query = False
-        else:
-            is_current_affairs_query = False
-        
-        # Phase 5: Query Summarization for large inputs
+                tail = query.split("\nCurrent question:", 1)[1].strip()
+                if tail:
+                    query = tail
+            except Exception:
+                pass
+
         final_query = query
-        try:
-             if len(query) > 5000:
-                 logger.info("Query exceeds 5000 chars. Summarizing for efficiency...")
-                 summary_prompt = (
-                     "Summarize the following user request into a concise search query, "
-                     "preserving all technical constraints and educational context:\n\n"
-                     f"{query}"
-                 )
-                 from config import settings
-                 resp = await self._classifier._llm.ainvoke(summary_prompt, config={"max_tokens": settings.query_analysis_tokens})
-                 
-                 # Track tokens for summarization
-                 usage = getattr(resp, "usage_metadata", None) or getattr(resp, "response_metadata", {}).get("token_usage", {})
-                 if usage:
-                     updates["input_tokens"] += usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-                     updates["output_tokens"] += usage.get("output_tokens") or usage.get("completion_tokens") or 0
 
-                 final_query = resp.content.strip()
-                 logger.info("Summarized query: %s", final_query[:100])
-             elif len(query) > 2000:
-                 logger.info("Query between 2000-5000 chars. Using as-is (no summarization needed for model context window)")
-                 final_query = query
-        except Exception as e:
-            logger.error("Query summarization failed: %s", e)
+        # Baseline carried from the orchestrator plan (already in state).
+        plan_query_type = str(
+            state.get("query_type") or plan.get("query_type") or "curriculum_specific"
+        )
+        plan_query_en = str(
+            state.get("query_en") or plan.get("standalone_query_en") or final_query
+        )
+        plan_subjects = list(state.get("subjects") or plan.get("subjects") or ["General"])
+        plan_confidence = float(plan.get("confidence") or 0.0)
+        wants_visual_eff = bool(
+            state.get("wants_visual_output") or plan.get("wants_new_image")
+        )
+        is_time_sensitive_query = bool(
+            state.get("is_time_sensitive_query") or plan.get("is_time_sensitive")
+        )
+        is_current_affairs_query = bool(state.get("is_current_affairs_query"))
 
-        # Phase 6: Sequential Analysis (Speculative RAG disabled for stability)
-        import asyncio
-        # Pre-compute interactive follow-up flag once so we can short-circuit
-        # any heuristic that would otherwise pull short replies (yes/idk/hmm/?)
-        # out of the interactive agent flow.
-        interactive_followup = self._is_interactive_followup(state, query)
+        quality = self._classifier.assess_query_quality(plan_query_en or final_query)
+        normalized_query = quality.normalized_query or plan_query_en or final_query
+        heuristic_result = self._classifier._check_heuristics(normalized_query)
+        interactive_followup = self._is_interactive_followup(state, final_query)
         if interactive_followup:
             logger.info(
-                "Interactive follow-up detected (agent_mode=interactive, prior assistant ended with '?'). "
-                "Overriding conversational/unclear heuristics."
+                "Interactive follow-up detected; deterministic override keeps it in the educational flow."
             )
-        try:
-            quality = self._classifier.assess_query_quality(final_query)
-            updates["query_en"] = quality.normalized_query or final_query
-            updates["clarification_message"] = None
 
-            # Run social heuristics before unclear-query guardrails so greetings
-            # (e.g., "hi") are not incorrectly routed to clarification.
-            heuristic_result = self._classifier._check_heuristics(
-                quality.normalized_query or final_query
+        updates["query_en"] = normalized_query
+        updates["clarification_message"] = None
+
+        # --- Deterministic unclear-query guard (gibberish/empty input) ---
+        if (
+            quality.is_unclear
+            and clarification_attempts < 1
+            and not heuristic_result
+            and not interactive_followup
+            and not has_images
+            and not wants_visual_eff
+            and plan_query_type != "image_generation"
+        ):
+            clarification_text = quality.clarification_prompt or (
+                "Could you clarify what you mean so I can help you better?"
             )
-            logger.info(f"DEBUG: analyze_query heuristic_result: {heuristic_result}")
+            updates.update({
+                "query_type": "conversational",
+                "response": clarification_text,
+                "needs_context": True,
+                "clarification_message": clarification_text,
+                "context_gathering_attempts": clarification_attempts + 1,
+                "subjects": [],
+                "llm_calls": 0,
+                "detected_language": self._detector.detect_language(query),
+                "language": self._detector.detect_language(query),
+                "timings": {"analyze_query": perf_counter() - start},
+                "is_time_sensitive_query": is_time_sensitive_query,
+                "is_current_affairs_query": is_current_affairs_query,
+            })
+            logger.info("Unclear query detected (%s). Asking one clarification.", quality.reason)
+            return updates
 
-            if quality.is_unclear and clarification_attempts < 1 and not heuristic_result and not interactive_followup:
-                clarification_text = quality.clarification_prompt or (
-                    "Could you clarify what you mean so I can help you better?"
-                )
+        # --- Deterministic abuse / scope gate ---
+        # Short-circuit abusive, out-of-scope, or identity/tech-disclosure turns
+        # with a friendly refuse+redirect before any retrieval/agent work. Skip
+        # for interactive follow-ups and image turns to avoid mis-firing on short
+        # Socratic replies or vision inputs.
+        if not interactive_followup and not has_images:
+            abuse_category, abuse_message = detect_abuse(final_query)
+            if abuse_category and abuse_message:
+                detected_lang = self._detector.detect_language(query)
                 updates.update({
                     "query_type": "conversational",
-                    "response": clarification_text,
-                    "needs_context": True,
-                    "clarification_message": clarification_text,
-                    "context_gathering_attempts": clarification_attempts + 1,
+                    "response": abuse_message,
                     "subjects": [],
                     "llm_calls": 0,
-                    "detected_language": self._detector.detect_language(query),
-                    "language": self._detector.detect_language(query),
-                    "timings": {"analyze_query": perf_counter() - start},
+                    "detected_language": detected_lang,
+                    "language": detected_lang,
                     "is_time_sensitive_query": is_time_sensitive_query,
                     "is_current_affairs_query": is_current_affairs_query,
+                    "timings": {"analyze_query": perf_counter() - start},
                 })
-                logger.info("Unclear query detected (%s). Asking one clarification.", quality.reason)
+                logger.info("Abuse/scope gate triggered (category=%s).", abuse_category)
                 return updates
 
-            # Heuristic: cheap follow-up resolution using cached context to avoid extra tokens
-            followup_phrases = {
-                "why", "how", "what", "explain", "explain more", "more",
-                "elaborate", "tell me more", "again", "details", "detail",
-                "give example", "examples", "example"
-            }
-            effective_query = quality.normalized_query or final_query
-            query_norm = effective_query.lower().strip()
-            memory_intent = self._detect_memory_intent(effective_query)
-            intro_entities = self._extract_intro_entities(effective_query)
-            intro_ack = self._build_intro_acknowledgement(intro_entities)
-            if memory_intent:
-                updates["memory_intent"] = memory_intent
-            if intro_entities:
-                updates["captured_intro_entities"] = intro_entities
-            
-            if heuristic_result and interactive_followup:
-                # Force the short reply to remain in the interactive (curriculum_specific)
-                # flow so the InteractiveStudentAgent can follow up on its own question
-                # instead of bouncing to the ConversationalAgent.
-                result = QueryClassification(
-                    query_type="curriculum_specific",
-                    translated_query=quality.normalized_query or final_query,
-                    confidence=1.0,
-                    reasoning="Interactive follow-up: short reply to open Socratic question.",
-                    subjects=state.get("subjects") or ["General"],
-                )
-                logger.info("DEBUG: analyze_query overrode heuristic with interactive-followup classification")
-            elif heuristic_result:
-                result = heuristic_result
-                logger.info(f"DEBUG: analyze_query set result to heuristic: {result.query_type}")
-            elif intro_ack:
-                result = QueryClassification(
-                    query_type="conversational",
-                    translated_query=effective_query,
-                    confidence=1.0,
-                    reasoning="Matched self-introduction heuristic.",
-                    subjects=["General"],
-                )
-                updates["response"] = intro_ack
-            elif memory_intent:
-                result = QueryClassification(
-                    query_type="conversational",
-                    translated_query=effective_query,
-                    confidence=1.0,
-                    reasoning=f"Matched direct memory intent ({memory_intent}).",
-                    subjects=["General"],
-                )
-            else:
-                is_followup = query_norm in followup_phrases
-                cached_resolved = None
-                if is_followup and user_session_id:
-                    try:
-                        from services.cache_service import CacheService
-                        cached_resolved = await CacheService.get(f"resolved_query:{user_session_id}")
-                    except Exception as e:
-                        logger.debug("Resolved query cache lookup failed: %s", e)
+        effective_query = normalized_query
+        memory_intent = self._detect_memory_intent(effective_query)
+        intro_entities = self._extract_intro_entities(effective_query)
+        intro_ack = self._build_intro_acknowledgement(intro_entities)
+        if memory_intent:
+            updates["memory_intent"] = memory_intent
+        if intro_entities:
+            updates["captured_intro_entities"] = intro_entities
 
-                if cached_resolved and is_followup:
-                    result = QueryClassification(
-                        query_type="curriculum_specific",
-                        translated_query=f"{cached_resolved}. Follow-up: {effective_query}",
-                        confidence=0.8,
-                        reasoning="Used cached resolved query for short follow-up.",
-                        subjects=["General"]
-                    )
-                else:
-                    # Classification task with 15s timeout
-                    result = await asyncio.wait_for(self._classifier.analyze(effective_query, history), timeout=15.0)
-        except asyncio.TimeoutError:
-            logger.warning("Query classification timed out after 15s")
+        # Baseline result derived from the orchestrator plan.
+        result = QueryClassification(
+            query_type=plan_query_type,
+            translated_query=plan_query_en or final_query,
+            confidence=plan_confidence,
+            reasoning="Turn plan (orchestrator).",
+            subjects=plan_subjects,
+            class_level=plan.get("class_level"),
+        )
+
+        # --- Deterministic overrides applied on top of the plan ---
+        if (
+            (interactive_followup or has_images)
+            and not wants_visual_eff
+            and plan_query_type != "image_generation"
+        ):
+            # Keep short replies / image uploads inside the educational pipeline so
+            # they don't leak into the ConversationalAgent.
+            reason = (
+                "Image upload: route to interactive vision pipeline."
+                if has_images
+                else "Interactive follow-up: short reply to open Socratic question."
+            )
             result = QueryClassification(
                 query_type="curriculum_specific",
-                translated_query=updates.get("query_en", final_query),
-                confidence=0.0,
-                reasoning="Fallback due to timeout",
-                subjects=["General"]
+                translated_query=plan_query_en or final_query,
+                confidence=1.0,
+                reasoning=reason,
+                subjects=plan_subjects or ["General"],
             )
-        except Exception as e:
-            logger.error("Query classification failed: %s", e)
+        elif (
+            heuristic_result is not None
+            and heuristic_result.query_type == "conversational"
+            and not wants_visual_eff
+            and plan_query_type != "image_generation"
+        ):
+            # Deterministic social shortcut (greeting / acknowledgment / vague help)
+            # is honored even if the plan classified the turn differently.
+            result = heuristic_result
+        elif intro_ack and plan_query_type != "image_generation":
             result = QueryClassification(
-                query_type="curriculum_specific",
-                translated_query=updates.get("query_en", final_query),
-                confidence=0.0,
-                reasoning=f"Fallback due to error: {e}"
+                query_type="conversational",
+                translated_query=effective_query,
+                confidence=1.0,
+                reasoning="Matched self-introduction heuristic.",
+                subjects=["General"],
             )
-        
-        # Final safety pass: if we are in an interactive follow-up, force the
-        # routing to curriculum_specific (the InteractiveStudentAgent) so that
-        # neither LLM classifier output nor acknowledgment heuristics can leak
-        # short replies (yes/idk/hmm/?) into the ConversationalAgent.
-        if interactive_followup and result.query_type == "conversational":
+            updates["response"] = intro_ack
+        elif memory_intent and plan_query_type != "image_generation":
+            result = QueryClassification(
+                query_type="conversational",
+                translated_query=effective_query,
+                confidence=1.0,
+                reasoning=f"Matched direct memory intent ({memory_intent}).",
+                subjects=["General"],
+            )
+
+        # Final safety: an interactive follow-up must never reach the conversational agent.
+        if (
+            interactive_followup
+            and not has_images
+            and result.query_type == "conversational"
+            and not wants_visual_eff
+        ):
             logger.info(
                 "Final safety override: forcing interactive follow-up to curriculum_specific (was '%s').",
                 result.query_type,
             )
             result = QueryClassification(
                 query_type="curriculum_specific",
-                translated_query=result.translated_query or quality.normalized_query or final_query,
+                translated_query=result.translated_query or plan_query_en or final_query,
                 confidence=1.0,
-                reasoning="Interactive follow-up override (post-classification).",
-                subjects=result.subjects or state.get("subjects") or ["General"],
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
+                reasoning="Interactive follow-up override (post-plan).",
+                subjects=result.subjects or plan_subjects or ["General"],
             )
 
-        # Prepare updates
+        # Acknowledgment detection (deterministic).
         normalized_chat = self._classifier._normalize_chat_phrase(query)
         normalized_chat_compact = re.sub(r"([a-z])\1{2,}", r"\1\1", normalized_chat)
         ack_tokens = set(getattr(self._classifier, "_ACK_TOKENS", set()) or set())
@@ -425,23 +462,18 @@ class AnalyzeQueryNode:
                 or "acknowledgment" in (result.reasoning or "").lower()
             )
         )
-        # Acknowledgments during an interactive follow-up should not carry the
-        # "is_acknowledgment" flag — they are answers to a Socratic question.
+        # Acknowledgments during an interactive follow-up are answers to a Socratic
+        # question, not standalone acknowledgments.
         if interactive_followup:
             is_acknowledgment_turn = False
+
         updates.update({
             "query_en": result.translated_query,
             "query_type": result.query_type,
             "subjects": result.subjects,
             "is_acknowledgment": is_acknowledgment_turn,
-            "llm_calls": 0 if (
-                result.reasoning.startswith("Used cached resolved query") or
-                result.reasoning.startswith("Cached result")
-            ) else 1,
-            "input_tokens": updates["input_tokens"] + result.input_tokens,
-            "output_tokens": updates["output_tokens"] + result.output_tokens,
-            "aux_input_tokens": updates.get("aux_input_tokens", 0) + result.input_tokens,
-            "aux_output_tokens": updates.get("aux_output_tokens", 0) + result.output_tokens,
+            # The single LLM planning call is accounted for in orchestrate_turn.
+            "llm_calls": 0,
             "is_time_sensitive_query": is_time_sensitive_query,
             "is_current_affairs_query": is_current_affairs_query,
         })
@@ -467,8 +499,24 @@ class AnalyzeQueryNode:
         language_preference_locked = parsed_locked or prior_locked or bool(memory_preferred)
 
         # Resolve target language with explicit precedence:
-        # explicit/locked preference > memory preference > detected language.
-        effective_language = preferred_response_language if language_preference_locked else detected_lang
+        # locked preference > memory preference > high-confidence detection > English.
+        min_lang_conf = float(settings.language_response_min_confidence or 0.80)
+        if language_preference_locked:
+            effective_language = preferred_response_language
+        else:
+            resolved = LanguageDetector.resolve_response_language(
+                detected_lang,
+                detect_confidence,
+                min_confidence=min_lang_conf,
+            )
+            if resolved == "en" and detected_lang != "en" and detect_confidence < min_lang_conf:
+                logger.info(
+                    "Language confidence %.3f for '%s' below %.2f; responding in English",
+                    detect_confidence,
+                    detected_lang,
+                    min_lang_conf,
+                )
+            effective_language = resolved
         if (
             not language_preference_locked
             and updates.get("is_acknowledgment")
@@ -480,6 +528,28 @@ class AnalyzeQueryNode:
         updates["preferred_response_language"] = preferred_response_language
         updates["language_preference_locked"] = language_preference_locked
         updates["language"] = effective_language
+
+        # Persist explicit language preference in session metadata so lock survives
+        # across requests even when transient graph state is not retained.
+        if parsed_preferred and parsed_locked:
+            current_meta = updates.get("session_metadata", state.get("session_metadata", {})) or {}
+            new_meta = dict(current_meta)
+            structured_raw = new_meta.get("structured_summary") or {}
+            if hasattr(structured_raw, "model_dump"):
+                structured = dict(structured_raw.model_dump() or {})
+            elif isinstance(structured_raw, dict):
+                structured = dict(structured_raw)
+            else:
+                structured = {}
+            existing_prefs = str(structured.get("user_preferences") or "").strip()
+            pref_marker = f"preferred_response_language: {parsed_preferred}"
+            if pref_marker not in existing_prefs.lower():
+                structured["user_preferences"] = (
+                    f"{existing_prefs}; {pref_marker}".strip("; ").strip()
+                    if existing_prefs else pref_marker
+                )
+            new_meta["structured_summary"] = structured
+            updates["session_metadata"] = new_meta
         
         # Override state language if needed, or just keep as-is
         # Typically we want to know what language the current query is in regardless of request
@@ -517,7 +587,6 @@ class AnalyzeQueryNode:
             # Trigger retrieval early if we have a translated query and subjects
             if self._retriever and result.translated_query:
                 try:
-                    from config import settings
                     if settings.parallel_rag_fetch:
                         logger.info("Executing speculative RAG for query: %s", result.translated_query[:50])
                         # We use the translated query and any extracted metadata for better retrieval
@@ -539,11 +608,32 @@ class AnalyzeQueryNode:
         if result.confidence >= 1.0 and "Matched" in result.reasoning:
             updates["llm_calls"] = 0
         
+        if wants_visual_eff and not has_images:
+            from services.image_modality_policy import (
+                conversation_supports_image_generation,
+                is_vague_generation_command,
+            )
+            from services.image_prompt_composer import format_conversation_history
+
+            if is_vague_generation_command(query) and conversation_supports_image_generation(history):
+                ctx_block = format_conversation_history(history, max_turns=10)
+                base = (updates.get("query_en") or query).strip()
+                marker = "[Conversation context for image generation"
+                if ctx_block and marker not in base:
+                    updates["query_en"] = (
+                        f"{base}\n\n"
+                        f"{marker} — use full thread, not only the latest line]\n"
+                        f"{ctx_block}"
+                    )
+                    logger.info(
+                        "Enriched vague image-generation request with %d chars of chat context",
+                        len(ctx_block),
+                    )
+
         # Cache resolved query for cheap follow-up handling
         if user_session_id and result.translated_query:
             try:
                 from services.cache_service import CacheService
-                from config import settings
                 await CacheService.set(
                     f"resolved_query:{user_session_id}",
                     result.translated_query,
@@ -554,5 +644,43 @@ class AnalyzeQueryNode:
         
         duration = perf_counter() - start
         updates["timings"] = {"analyze_query": duration}
+
+        findings = list(state.get("agent_findings") or [])
+        findings = publish(
+            findings,
+            "analyze_query",
+            "language",
+            f"target={updates.get('language', 'en')}",
+            {
+                "target_lang": updates.get("language", "en"),
+                "detected_lang": updates.get("detected_language", ""),
+                "preference_locked": bool(updates.get("language_preference_locked")),
+            },
+        )
+        findings = publish(
+            findings,
+            "analyze_query",
+            "curriculum",
+            f"type={updates.get('query_type', '')}",
+            {
+                "subjects": updates.get("subjects") or [],
+                "query_en": updates.get("query_en", ""),
+                "query_type": updates.get("query_type", ""),
+                "class_level": (updates.get("session_metadata") or {}).get("class_level"),
+            },
+        )
+        if updates.get("is_context_resolved_followup"):
+            findings = publish(
+                findings,
+                "analyze_query",
+                "context",
+                "Session thread applied to current turn",
+                {
+                    "effective_query": (updates.get("effective_query") or "")[:500],
+                    "wants_visual_output": bool(updates.get("wants_visual_output")),
+                },
+                priority=7,
+            )
+        updates["agent_findings"] = findings
         
         return updates

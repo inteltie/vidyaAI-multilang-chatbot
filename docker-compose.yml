@@ -12,8 +12,19 @@ services:
       - .env # This reads all variables from .env file
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - GENERATED_IMAGE_DIR=/app/data/generated
+      - PUBLIC_BASE_URL=http://localhost:8001
+      - GOOGLE_IMAGE_MODEL=gemini-3.1-flash-image
+      - GOOGLE_IMAGE_SIZE=1K
+      - GOOGLE_IMAGE_ASPECT_RATIO=16:9
+      - MONGO_SESSION_LOAD_TIMEOUT_S=3
+      - GRAPH_TIMEOUT_S=120
+      - IMAGE_GENERATION_TIMEOUT_S=90
+      - UVICORN_WORKERS=2
     ports:
       - "8001:8001"
+    volumes:
+      - ./data/generated:/app/data/generated
     networks:
       - backend
     restart: unless-stopped
