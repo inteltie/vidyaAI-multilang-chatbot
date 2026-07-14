@@ -48,6 +48,16 @@ class Settings(BaseModel):
     embedding_model: str = Field("text-embedding-3-large", description="Embedding Model Name")
     llm_temperature: float = Field(0.0, description="LLM Temperature")
 
+    # -- API Authentication --
+    chatbot_api_key: str = Field(
+        "",
+        description="Shared secret for client API authentication (CHATBOT_API_KEY)",
+    )
+    api_key_header: str = Field(
+        "X-API-Key",
+        description="Request header name clients must send with the shared API key",
+    )
+
     # -- Application Settings --
     # Memory
     max_tokens_default: int = Field(500, description="Default max tokens for LLM response")
@@ -206,6 +216,9 @@ class Settings(BaseModel):
             "summary_model_name": os.getenv("SUMMARY_MODEL_NAME") or "gpt-4.1-nano",
             "embedding_model": os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large",
             "llm_temperature": float(os.getenv("LLM_TEMPERATURE") or 0.0),
+
+            "chatbot_api_key": (os.getenv("CHATBOT_API_KEY") or "").strip(),
+            "api_key_header": (os.getenv("API_KEY_HEADER") or "X-API-Key").strip(),
             
             "max_tokens_default": int(os.getenv("MAX_TOKENS_DEFAULT") or 1500),
             "max_tokens_detailed": int(os.getenv("MAX_TOKENS_DETAILED") or 3000),

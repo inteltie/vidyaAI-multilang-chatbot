@@ -54,6 +54,7 @@ from services import (
 )
 from state import AgentState
 from config import settings
+from middleware import ApiKeyMiddleware, build_api_auth
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,10 @@ class BackendApp:
         self._graph = None
         self._memory_service: MemoryService | None = None
         self._language_detector = LanguageDetector()
+        self._api_auth_deps, _ = build_api_auth(
+            self._settings.chatbot_api_key,
+            self._settings.api_key_header,
+        )
         self._configure_logging()
         # Build app with lifespan
         self._app = self._build_app()
@@ -198,7 +203,22 @@ class BackendApp:
             lifespan=lifespan,
         )
         
-        # Add CORS middleware to allow cross-origin requests
+        if self._settings.chatbot_api_key:
+            app.add_middleware(
+                ApiKeyMiddleware,
+                api_key=self._settings.chatbot_api_key,
+                header_name=self._settings.api_key_header,
+            )
+            logger.info(
+                "API key authentication enabled (header: %s).",
+                self._settings.api_key_header,
+            )
+        else:
+            logger.warning(
+                "CHATBOT_API_KEY is not set; API endpoints are open without authentication."
+            )
+
+        # CORS runs outermost so error responses (e.g. 401) still include CORS headers.
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],  # Allow all origins - restrict in production
@@ -372,6 +392,7 @@ class BackendApp:
         @self._app.get(
             "/sessions/{user_session_id}/generated-images",
             response_model=SessionGeneratedImagesResponse,
+            dependencies=self._api_auth_deps,
         )
         async def session_generated_images(
             user_session_id: str,
@@ -409,6 +430,7 @@ class BackendApp:
         @self._app.get(
             "/sessions/{user_session_id}/messages",
             response_model=SessionMessagesResponse,
+            dependencies=self._api_auth_deps,
         )
         async def session_messages(
             user_session_id: str,
@@ -470,6 +492,7 @@ class BackendApp:
             "/chat",
             response_model=ChatResponse,
             responses={500: {"model": ErrorResponse}},
+            dependencies=self._api_auth_deps,
         )
         async def chat_endpoint(request: ChatRequest, graph=Depends(self._get_graph))  -> ChatResponse:
             # 1. Enforce single graph execution per session (Stability Phase 1 - Distributed)

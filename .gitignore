@@ -137,3 +137,6 @@ data/generated/
 
 *.env
 tests/*
+
+explanation_readme.md
+.cursorignore
