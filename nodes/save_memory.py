@@ -36,6 +36,7 @@ class SaveMemoryNode:
             query,
             has_image_input=user_modality.get("has_image_input", False),
             image_input_ids=user_modality.get("image_input_ids"),
+            image_input_urls=user_modality.get("image_input_urls"),
             has_generated_image=False,
         )
         await self._memory_service.background_save_message(
@@ -103,6 +104,7 @@ class SaveMemoryNode:
             query,
             has_image_input=user_modality["has_image_input"],
             image_input_ids=user_modality["image_input_ids"],
+            image_input_urls=user_modality["image_input_urls"],
         )
         await self._memory_service.add_message(
             user_session_id,

@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 from config import settings
 from services.agent_findings import publish
 from services.image_input import build_effective_query, validate_and_decode_images
+from services.input_image_store import upload_input_images
 from services.costing import merge_patches, patch_component_usage
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class ImageAnalyzerAgent:
         query = (state.get("query") or "").strip()
         decoded = validate_and_decode_images(raw_images)
         upload_id = uuid.uuid4().hex[:12]
+        session_id = str(state.get("user_session_id") or "").strip()
 
         content: List[Dict[str, Any]] = [
             {
@@ -103,12 +105,16 @@ class ImageAnalyzerAgent:
                     "image_id": image_id,
                     "upload_id": upload_id,
                     "user_query": query,
+                    "url": "",
                     "descriptions": [desc],
                     "summary_line": summary,
                     "image_context": desc,
                     "uploaded_at": now_iso,
                 }
             )
+
+        if session_id:
+            records = await upload_input_images(session_id, decoded, records)
 
         effective_query = build_effective_query(query, image_context)
 

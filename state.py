@@ -95,6 +95,7 @@ class ConversationTurn(TypedDict, total=False):
     content: str
     has_image_input: bool
     image_input_ids: List[str]
+    image_input_urls: List[str]
     has_generated_image: bool
     generated_image_ids: List[str]
     generated_image_urls: List[str]
@@ -145,6 +146,7 @@ class UploadedImageRecord(TypedDict, total=False):
     image_id: str
     upload_id: str
     user_query: str
+    url: str
     descriptions: List[str]
     summary_line: str
     image_context: str
@@ -152,7 +154,7 @@ class UploadedImageRecord(TypedDict, total=False):
 
 
 class GeneratedImageRecord(TypedDict, total=False):
-    """Persisted metadata for a generated diagram (file on disk)."""
+    """Persisted metadata for a generated diagram (S3 URL)."""
 
     image_id: str
     url: str

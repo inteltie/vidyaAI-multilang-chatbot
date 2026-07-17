@@ -14,9 +14,11 @@ API_KEY_SCHEME_NAME = "ApiKeyAuth"
 def build_api_auth(
     expected_key: str,
     header_name: str = "X-API-Key",
+    *,
+    enabled: bool = True,
 ) -> tuple[List[Any], Any]:
-    """Return route dependencies that enforce API key auth when a key is configured."""
-    if not expected_key:
+    """Return route dependencies that enforce API key auth when enabled and configured."""
+    if not enabled or not expected_key:
         return [], None
 
     api_key_header_scheme = APIKeyHeader(

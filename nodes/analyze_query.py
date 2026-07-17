@@ -8,7 +8,11 @@ from typing import Any, Dict
 from time import perf_counter
 
 from config import settings
-from services.query_classifier import QueryClassifier, QueryClassification
+from services.query_classifier import (
+    QueryClassifier,
+    QueryClassification,
+    normalize_classification_query_type,
+)
 from services.language_detector import LanguageDetector
 from services.agent_findings import publish
 from services.prompt_policy import detect_abuse
@@ -287,6 +291,10 @@ class AnalyzeQueryNode:
         plan_query_type = str(
             state.get("query_type") or plan.get("query_type") or "curriculum_specific"
         )
+        classification_query_type = normalize_classification_query_type(
+            plan_query_type,
+            has_images=has_images,
+        )
         plan_query_en = str(
             state.get("query_en") or plan.get("standalone_query_en") or final_query
         )
@@ -376,7 +384,7 @@ class AnalyzeQueryNode:
 
         # Baseline result derived from the orchestrator plan.
         result = QueryClassification(
-            query_type=plan_query_type,
+            query_type=classification_query_type,
             translated_query=plan_query_en or final_query,
             confidence=plan_confidence,
             reasoning="Turn plan (orchestrator).",

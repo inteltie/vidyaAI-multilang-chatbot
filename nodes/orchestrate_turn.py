@@ -22,7 +22,7 @@ from time import perf_counter
 from typing import Any, Dict, Optional
 
 from config import settings
-from services.query_classifier import QueryClassifier, QueryClassification
+from services.query_classifier import QueryClassifier, QueryClassification, normalize_classification_query_type
 from services.query_understanding import QueryUnderstandingService, TurnPlan
 from state import AgentState
 
@@ -265,9 +265,16 @@ class OrchestratorNode:
 
         standalone = (plan.standalone_query_en or "").strip() or query
 
+        normalized_query_type = normalize_classification_query_type(
+            plan.query_type,
+            has_images=has_images,
+        )
+        if normalized_query_type != plan.query_type:
+            plan = plan.model_copy(update={"query_type": normalized_query_type})
+
         updates["turn_plan"] = plan.model_dump()
         updates["query_understanding"] = plan.model_dump()
-        updates["query_type"] = plan.query_type
+        updates["query_type"] = normalized_query_type
         updates["query_en"] = standalone
         updates["subjects"] = plan.subjects or ["General"]
         updates["wants_visual_output"] = bool(plan.wants_new_image)

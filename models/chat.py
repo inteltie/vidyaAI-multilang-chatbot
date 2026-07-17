@@ -17,6 +17,7 @@ class UploadedImageRecord(BaseModel):
     image_id: str
     upload_id: str
     user_query: str
+    url: str = ""
     descriptions: List[str] = Field(default_factory=list)
     summary_line: str = ""
     image_context: str = ""
@@ -24,7 +25,7 @@ class UploadedImageRecord(BaseModel):
 
 
 class GeneratedImageRecord(BaseModel):
-    """Persisted metadata for a generated diagram (bytes on disk, not in Mongo)."""
+    """Persisted metadata for a generated diagram (S3 URL, not local bytes)."""
 
     image_id: str
     url: str
@@ -46,6 +47,10 @@ class ChatMessage(BaseModel):
     image_input_ids: List[str] = Field(
         default_factory=list,
         description="Upload/image ids for user-provided images on this turn.",
+    )
+    image_input_urls: List[str] = Field(
+        default_factory=list,
+        description="S3 URLs for user-provided images on this turn.",
     )
     has_generated_image: bool = Field(
         False, description="True when the assistant reply included a generated diagram."
@@ -143,6 +148,7 @@ class ChatSession(Document):
         *,
         has_image_input: bool = False,
         image_input_ids: Optional[List[str]] = None,
+        image_input_urls: Optional[List[str]] = None,
         has_generated_image: bool = False,
         generated_image_ids: Optional[List[str]] = None,
         generated_image_urls: Optional[List[str]] = None,
@@ -153,6 +159,7 @@ class ChatSession(Document):
             text=text,
             has_image_input=has_image_input,
             image_input_ids=list(image_input_ids or []),
+            image_input_urls=list(image_input_urls or []),
             has_generated_image=has_generated_image,
             generated_image_ids=list(generated_image_ids or []),
             generated_image_urls=list(generated_image_urls or []),

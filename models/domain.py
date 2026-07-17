@@ -12,20 +12,41 @@ load_dotenv()
 
 ALLOWED_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
+# Aliases accepted from clients and normalized before validation/storage.
+IMAGE_MIME_ALIASES = frozenset({"image/jpg", "image/pjpeg"})
+
+
+def normalize_image_mime(mime_type: str) -> str:
+    """Normalize client mime types (e.g. image/jpg -> image/jpeg)."""
+    normalized = (mime_type or "").strip().lower()
+    if normalized in IMAGE_MIME_ALIASES:
+        return "image/jpeg"
+    return normalized
+
+
+def is_supported_image_mime(mime_type: str) -> bool:
+    """True when mime is allowed directly or via alias normalization."""
+    return normalize_image_mime(mime_type) in ALLOWED_IMAGE_MIME_TYPES
+
 
 class ImageInput(BaseModel):
     """Base64 image attachment for interactive chat."""
 
-    mime_type: str = Field(..., description="image/jpeg, image/png, or image/webp")
+    mime_type: str = Field(
+        ...,
+        description="image/jpeg, image/jpg, image/png, or image/webp",
+    )
     data: str = Field(..., description="Base64-encoded image bytes without data-URL prefix")
 
     @field_validator("mime_type")
     @classmethod
     def validate_mime(cls, v: str) -> str:
-        normalized = (v or "").strip().lower()
+        raw = (v or "").strip().lower()
+        normalized = normalize_image_mime(raw)
         if normalized not in ALLOWED_IMAGE_MIME_TYPES:
             raise ValueError(
-                f"Unsupported mime_type '{v}'. Allowed: {', '.join(sorted(ALLOWED_IMAGE_MIME_TYPES))}"
+                "Unsupported mime_type "
+                f"'{v}'. Allowed: image/jpeg, image/jpg, image/png, image/webp"
             )
         return normalized
 
@@ -70,6 +91,16 @@ class GeneratedImageOutput(BaseModel):
     )
 
 
+class UploadedImageOutput(BaseModel):
+    """User-uploaded image metadata returned to the client (S3 URL, no base64)."""
+
+    image_id: str = ""
+    upload_id: str = ""
+    url: str = ""
+    summary_line: str = ""
+    uploaded_at: str = ""
+
+
 class MessageModalityTurn(BaseModel):
     """Per-message flags for image input vs generated diagram output."""
 
@@ -77,6 +108,7 @@ class MessageModalityTurn(BaseModel):
     content_preview: str = ""
     has_image_input: bool = False
     image_input_ids: List[str] = Field(default_factory=list)
+    image_input_urls: List[str] = Field(default_factory=list)
     has_generated_image: bool = False
     generated_image_ids: List[str] = Field(default_factory=list)
     generated_image_urls: List[str] = Field(default_factory=list)
@@ -107,6 +139,7 @@ class SessionMessageRecord(BaseModel):
     timestamp: str = ""
     has_image_input: bool = False
     image_input_ids: List[str] = Field(default_factory=list)
+    image_input_urls: List[str] = Field(default_factory=list)
     has_generated_image: bool = False
     generated_image_ids: List[str] = Field(default_factory=list)
     generated_image_urls: List[str] = Field(default_factory=list)
@@ -268,6 +301,14 @@ class ChatResponse(BaseModel):
     )
     web_search_calls: int = Field(0, description="Billable web_search_preview tool invocations this request.")
     images_analyzed: int = Field(0, description="Images sent to vision analysis this request.")
+    input_images: List[UploadedImageOutput] = Field(
+        default_factory=list,
+        description="User-uploaded image metadata for this request (S3 URLs, no base64).",
+    )
+    image_input_urls: List[str] = Field(
+        default_factory=list,
+        description="S3 URLs for user-uploaded images on this request.",
+    )
     generated_images: List[GeneratedImageOutput] = Field(
         default_factory=list,
         description="Generated diagram metadata for this request (URL only; fetch via url).",

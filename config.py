@@ -6,8 +6,8 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (.env wins over pre-set shell vars for local dev)
+load_dotenv(override=True)
 
 
 def str_to_bool(val: str | None, default: bool = True) -> bool:
@@ -56,6 +56,13 @@ class Settings(BaseModel):
     api_key_header: str = Field(
         "X-API-Key",
         description="Request header name clients must send with the shared API key",
+    )
+    api_key_auth_enabled: bool = Field(
+        False,
+        description=(
+            "When True, require CHATBOT_API_KEY on protected routes. "
+            "When unset in env, defaults to True if CHATBOT_API_KEY is set."
+        ),
     )
 
     # -- Application Settings --
@@ -144,7 +151,26 @@ class Settings(BaseModel):
     )
     public_base_url: str = Field(
         "http://localhost:8001",
-        description="Public API base URL for generated image links",
+        description="Public API base URL for generated image links (local fallback)",
+    )
+    # Amazon S3 (preferred for input + generated image persistence)
+    aws_access_key_id: str = Field(
+        "",
+        description="Optional. Local dev only; omit in production when using an IAM role",
+    )
+    aws_secret_access_key: str = Field(
+        "",
+        description="Optional. Local dev only; omit in production when using an IAM role",
+    )
+    s3_bucket: str = Field("", description="S3 bucket for chat image storage")
+    aws_region: str = Field("ap-south-1", description="AWS region for S3 bucket")
+    s3_prefix: str = Field(
+        "chat-images",
+        description="S3 key prefix for uploaded and generated images",
+    )
+    s3_public_base_url: str = Field(
+        "",
+        description="Optional CDN/public base URL for S3 objects (overrides default S3 URL)",
     )
     max_remembered_generated_images: int = Field(
         20, description="Max generated image metadata records per session in Mongo"
@@ -198,6 +224,14 @@ class Settings(BaseModel):
     @classmethod
     def from_env(cls) -> "Settings":
         """Create settings from environment variables with validation."""
+        chatbot_api_key = _strip_env_comment(os.getenv("CHATBOT_API_KEY") or "")
+        api_key_auth_env = _strip_env_comment(os.getenv("API_KEY_AUTH_ENABLED") or "")
+        if not api_key_auth_env:
+            # Backward compatible: auth on when a key is configured unless explicitly overridden.
+            api_key_auth_enabled = bool(chatbot_api_key)
+        else:
+            api_key_auth_enabled = str_to_bool(api_key_auth_env, False)
+
         data = {
             # Map environment variables to fields
             "openai_api_key": os.getenv("OPENAI_API_KEY"),
@@ -217,8 +251,9 @@ class Settings(BaseModel):
             "embedding_model": os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large",
             "llm_temperature": float(os.getenv("LLM_TEMPERATURE") or 0.0),
 
-            "chatbot_api_key": (os.getenv("CHATBOT_API_KEY") or "").strip(),
+            "chatbot_api_key": chatbot_api_key,
             "api_key_header": (os.getenv("API_KEY_HEADER") or "X-API-Key").strip(),
+            "api_key_auth_enabled": api_key_auth_enabled,
             
             "max_tokens_default": int(os.getenv("MAX_TOKENS_DEFAULT") or 1500),
             "max_tokens_detailed": int(os.getenv("MAX_TOKENS_DETAILED") or 3000),
@@ -284,6 +319,12 @@ class Settings(BaseModel):
             ),
             "generated_image_dir": os.getenv("GENERATED_IMAGE_DIR") or "./data/generated",
             "public_base_url": os.getenv("PUBLIC_BASE_URL") or "http://localhost:8001",
+            "aws_access_key_id": (os.getenv("AWS_ACCESS_KEY_ID") or "").strip(),
+            "aws_secret_access_key": (os.getenv("AWS_SECRET_ACCESS_KEY") or "").strip(),
+            "s3_bucket": (os.getenv("S3_BUCKET") or os.getenv("AWS_S3_BUCKET") or "").strip(),
+            "aws_region": (os.getenv("AWS_REGION") or "ap-south-1").strip(),
+            "s3_prefix": (os.getenv("S3_PREFIX") or "chat-images").strip(),
+            "s3_public_base_url": (os.getenv("S3_PUBLIC_BASE_URL") or "").strip(),
             "max_remembered_generated_images": int(
                 os.getenv("MAX_REMEMBERED_GENERATED_IMAGES") or 20
             ),

@@ -29,10 +29,12 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         *,
         api_key: str,
         header_name: str = "X-API-Key",
+        enabled: bool = True,
         exempt_paths: Iterable[str] | None = None,
         exempt_prefixes: Iterable[str] | None = None,
     ) -> None:
         super().__init__(app)
+        self._enabled = enabled
         self._api_key = api_key
         self._header_name = header_name.lower()
         self._exempt_paths = frozenset(exempt_paths or DEFAULT_EXEMPT_PATHS)
@@ -41,7 +43,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Response]
     ) -> Response:
-        if not self._api_key:
+        if not self._enabled or not self._api_key:
             return await call_next(request)
 
         if request.method == "OPTIONS":

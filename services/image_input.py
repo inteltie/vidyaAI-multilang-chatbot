@@ -7,7 +7,7 @@ import binascii
 from typing import Any, Dict, List
 
 from config import settings
-from models.domain import ALLOWED_IMAGE_MIME_TYPES
+from models.domain import is_supported_image_mime, normalize_image_mime
 
 
 def build_data_url(mime_type: str, data: str) -> str:
@@ -31,9 +31,10 @@ def validate_and_decode_images(images: List[Dict[str, Any]]) -> List[Dict[str, s
     decoded: List[Dict[str, str]] = []
 
     for idx, img in enumerate(images):
-        mime = (img.get("mime_type") or "").strip().lower()
-        if mime not in ALLOWED_IMAGE_MIME_TYPES:
-            raise ValueError(f"Image {idx + 1}: unsupported mime_type '{mime}'")
+        raw_mime = (img.get("mime_type") or "").strip().lower()
+        if not is_supported_image_mime(raw_mime):
+            raise ValueError(f"Image {idx + 1}: unsupported mime_type '{raw_mime}'")
+        mime = normalize_image_mime(raw_mime)
 
         raw_b64 = (img.get("data") or "").strip()
         if not raw_b64:

@@ -27,6 +27,7 @@ from models.domain import (
     SessionGeneratedImagesResponse,
     SessionMessageRecord,
     SessionMessagesResponse,
+    UploadedImageOutput,
 )
 from services.message_modality import build_assistant_modality, build_user_modality
 from models import ChatSession
@@ -72,18 +73,24 @@ class BackendApp:
         self._api_auth_deps, _ = build_api_auth(
             self._settings.chatbot_api_key,
             self._settings.api_key_header,
+            enabled=self._settings.api_key_auth_enabled,
         )
         self._configure_logging()
         # Build app with lifespan
         self._app = self._build_app()
-        from services.generated_image_store import ensure_generated_image_dir
+        from services.s3_storage import s3_configured
 
-        generated_dir = ensure_generated_image_dir()
-        self._app.mount(
-            "/generated",
-            StaticFiles(directory=str(generated_dir)),
-            name="generated",
-        )
+        if not s3_configured():
+            from services.generated_image_store import ensure_generated_image_dir
+
+            generated_dir = ensure_generated_image_dir()
+            self._app.mount(
+                "/generated",
+                StaticFiles(directory=str(generated_dir)),
+                name="generated",
+            )
+        else:
+            logger.info("S3 configured; skipping local /generated static mount")
         self._configure_routes()
 
     @property
@@ -105,9 +112,14 @@ class BackendApp:
             """Lifespan context manager for startup and shutdown."""
             # Startup
             logger.info("Starting up application...")
-            from services.generated_image_store import ensure_generated_image_dir
+            from services.s3_storage import s3_configured
 
-            ensure_generated_image_dir()
+            if not s3_configured():
+                from services.generated_image_store import ensure_generated_image_dir
+
+                ensure_generated_image_dir()
+            else:
+                logger.info("S3 configured for chat image storage")
             
             # Redis initialization
             for i in range(5):
@@ -203,19 +215,28 @@ class BackendApp:
             lifespan=lifespan,
         )
         
-        if self._settings.chatbot_api_key:
+        if self._settings.api_key_auth_enabled and self._settings.chatbot_api_key:
             app.add_middleware(
                 ApiKeyMiddleware,
                 api_key=self._settings.chatbot_api_key,
                 header_name=self._settings.api_key_header,
+                enabled=True,
             )
             logger.info(
-                "API key authentication enabled (header: %s).",
+                "API key authentication ENABLED (header: %s, key configured: yes).",
                 self._settings.api_key_header,
             )
-        else:
+        elif self._settings.api_key_auth_enabled and not self._settings.chatbot_api_key:
             logger.warning(
-                "CHATBOT_API_KEY is not set; API endpoints are open without authentication."
+                "API_KEY_AUTH_ENABLED=true but CHATBOT_API_KEY is not set; "
+                "API endpoints are open without authentication."
+            )
+        else:
+            logger.info(
+                "API key authentication DISABLED "
+                "(API_KEY_AUTH_ENABLED=%s, CHATBOT_API_KEY set=%s).",
+                self._settings.api_key_auth_enabled,
+                bool(self._settings.chatbot_api_key),
             )
 
         # CORS runs outermost so error responses (e.g. 401) still include CORS headers.
@@ -463,6 +484,7 @@ class BackendApp:
                         timestamp=ts,
                         has_image_input=bool(getattr(m, "has_image_input", False)),
                         image_input_ids=list(getattr(m, "image_input_ids", None) or []),
+                        image_input_urls=list(getattr(m, "image_input_urls", None) or []),
                         has_generated_image=bool(getattr(m, "has_generated_image", False)),
                         generated_image_ids=list(
                             getattr(m, "generated_image_ids", None) or []
@@ -676,6 +698,22 @@ class BackendApp:
                     image_generation_status = "interactive_recommended"
                 raw_generated = final_state.get("generated_images") or []
 
+                user_modality = build_user_modality(
+                    {**final_state, "images": request.images}
+                )
+                raw_uploaded = final_state.get("new_uploaded_image_records") or []
+                input_images = [
+                    UploadedImageOutput(
+                        image_id=str(rec.get("image_id") or ""),
+                        upload_id=str(rec.get("upload_id") or ""),
+                        url=str(rec.get("url") or ""),
+                        summary_line=str(rec.get("summary_line") or ""),
+                        uploaded_at=str(rec.get("uploaded_at") or ""),
+                    )
+                    for rec in raw_uploaded
+                ]
+                image_input_urls = list(user_modality.get("image_input_urls") or [])
+
                 generated_images = []
                 for img in raw_generated:
                     if not img.get("url"):
@@ -823,6 +861,8 @@ class BackendApp:
                     cost_by_component_usd=cost_details["cost_by_component_usd"],
                     web_search_calls=cost_details["web_search_calls"],
                     images_analyzed=cost_details["images_analyzed"],
+                    input_images=input_images,
+                    image_input_urls=image_input_urls,
                     generated_images=generated_images,
                     image_generation_calls=cost_details["image_generation_calls"],
                     cost_usd_image_generation=cost_details["cost_usd_image_generation"],
@@ -842,9 +882,7 @@ class BackendApp:
                     rewrite_guard_reason=rewrite_guard_reason,
                     rewrite_overlap_ratio=rewrite_overlap_ratio,
                     rewrite_used_original_due_to_guard=rewrite_used_original_due_to_guard,
-                    user_message_had_image_input=build_user_modality(
-                        {**final_state, "images": request.images}
-                    )["has_image_input"],
+                    user_message_had_image_input=user_modality["has_image_input"],
                     assistant_message_has_generated_image=bool(generated_images),
                     message_modality_timeline=[
                         MessageModalityTurn(**row)

@@ -12,6 +12,26 @@ from state import ConversationTurn
 logger = logging.getLogger(__name__)
 
 
+def normalize_classification_query_type(
+    query_type: str,
+    *,
+    has_images: bool = False,
+) -> str:
+    """
+    Map orchestrator/planner query types to QueryClassification literals.
+
+    TurnPlan.route may be ``image_analyze``; query_type for downstream agents must
+    remain one of conversational | curriculum_specific | image_generation.
+    """
+    normalized = (query_type or "curriculum_specific").strip().lower()
+    if normalized == "image_analyze":
+        return "curriculum_specific"
+    if has_images and normalized != "image_generation":
+        return "curriculum_specific"
+    if normalized in ("conversational", "curriculum_specific", "image_generation"):
+        return normalized
+    return "curriculum_specific"
+
 
 class QueryClassification(BaseModel):
     """Classification result for a user query."""

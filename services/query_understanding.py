@@ -58,7 +58,8 @@ class TurnPlan(BaseModel):
         default="curriculum_specific",
         description=(
             "Coarse category used by downstream agents. One of: "
-            "'conversational', 'curriculum_specific', 'image_generation'."
+            "'conversational', 'curriculum_specific', 'image_generation'. "
+            "Do NOT use 'image_analyze' here — set route='image_analyze' instead."
         ),
     )
     needs_curriculum: bool = Field(
@@ -160,7 +161,8 @@ _SYSTEM_PROMPT = (
     "- Wants a NEW diagram/visual created => route='image_generate', "
     "query_type='image_generation', wants_new_image=true.\n"
     "- Asking ABOUT an existing/attached image or a numbered point on it => "
-    "route='image_analyze', wants_image_explanation=true, wants_new_image=false.\n\n"
+    "route='image_analyze', query_type='curriculum_specific', "
+    "wants_image_explanation=true, wants_new_image=false.\n\n"
     "Distinguish carefully between wanting a NEW image vs. wanting an EXISTING image "
     "explained:\n"
     "  * 'draw/generate/create/make a diagram of X', 'show me X visually' => request_new_image "
