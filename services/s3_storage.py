@@ -63,8 +63,8 @@ def _object_key(
     safe_session = _sanitize_segment(session_id)
     safe_image = _sanitize_segment(image_id, fallback=image_id)
     if kind == "upload":
-        safe_upload = _sanitize_segment(upload_id or "upload")
-        return f"{prefix}/uploads/{safe_session}/{safe_upload}/{safe_image}{ext}"
+        # e.g. chat-images/uploads/965000/b935825cca97.jpg
+        return f"{prefix}/uploads/{safe_session}/{safe_image}{ext}"
     return f"{prefix}/generated/{safe_session}/{safe_image}{ext}"
 
 
