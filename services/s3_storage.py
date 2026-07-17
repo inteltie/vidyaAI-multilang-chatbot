@@ -6,6 +6,7 @@ import logging
 import re
 from functools import lru_cache
 from typing import Literal, Optional
+from urllib.parse import unquote, urlparse
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -15,6 +16,10 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _SAFE_SEGMENT = re.compile(r"[^a-zA-Z0-9_-]+")
+_S3_VIRTUAL_HOST_RE = re.compile(
+    r"^([a-z0-9][a-z0-9.-]*)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$",
+    re.IGNORECASE,
+)
 
 _MIME_EXT = {
     "image/png": ".png",
@@ -160,7 +165,54 @@ def upload_image_bytes(
         return None
 
 
+def parse_s3_https_url(url: str) -> tuple[str, str] | None:
+    """
+    Parse a virtual-hosted-style S3 HTTPS URL into (bucket, key).
+
+    Supports: https://bucket.s3.region.amazonaws.com/path/to/key
+    """
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+
+    match = _S3_VIRTUAL_HOST_RE.match(parsed.netloc)
+    if not match:
+        return None
+
+    bucket = match.group(1)
+    key = unquote((parsed.path or "").lstrip("/"))
+    if not key:
+        return None
+    return bucket, key
+
+
+def download_s3_object(bucket: str, key: str) -> bytes:
+    """Download object bytes from S3 using the configured credential chain."""
+    client = _s3_client()
+    response = client.get_object(Bucket=bucket, Key=key)
+    body = response.get("Body")
+    if body is None:
+        raise ValueError(f"S3 object s3://{bucket}/{key} returned no body")
+    return body.read()
+
+
+def download_image_bytes_from_s3_url(url: str) -> bytes | None:
+    """Download image bytes when the URL points at an S3 object."""
+    parsed = parse_s3_https_url(url)
+    if not parsed:
+        return None
+    bucket, key = parsed
+    try:
+        return download_s3_object(bucket, key)
+    except (BotoCoreError, ClientError, ValueError) as exc:
+        logger.exception("Failed to download S3 image bucket=%s key=%s: %s", bucket, key, exc)
+        return None
+
+
 __all__ = [
+    "download_image_bytes_from_s3_url",
+    "download_s3_object",
+    "parse_s3_https_url",
     "s3_configured",
     "upload_image_bytes",
 ]

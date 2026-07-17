@@ -1,4 +1,4 @@
-"""Upload user-provided chat images to S3 and attach URLs to analyzer records."""
+"""Persist user-provided chat image URLs (S3 upload or passthrough)."""
 
 from __future__ import annotations
 
@@ -12,27 +12,40 @@ from services.s3_storage import s3_configured, upload_image_bytes
 logger = logging.getLogger(__name__)
 
 
-async def upload_input_images(
+async def attach_input_image_urls(
     session_id: str,
-    decoded_images: List[Dict[str, str]],
+    prepared_images: List[Dict[str, Any]],
     records: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Upload decoded input images to S3 and set ``url`` on each matching record.
+    Set ``url`` on each uploaded-image record.
 
-    Records and decoded_images must be in the same order.
+    - URL input (already on S3): reuse ``source_url``, no re-upload.
+    - Base64 input: upload to S3 when configured.
     """
-    if not decoded_images or not records or not s3_configured():
+    if not prepared_images or not records:
         return records
 
     updated: List[Dict[str, Any]] = []
     for idx, record in enumerate(records):
         rec = dict(record)
-        if idx >= len(decoded_images):
+        if idx >= len(prepared_images):
             updated.append(rec)
             continue
 
-        item = decoded_images[idx]
+        item = prepared_images[idx]
+        source_url = str(item.get("source_url") or "").strip()
+        skip_upload = bool(item.get("skip_s3_upload"))
+
+        if skip_upload and source_url:
+            rec["url"] = source_url
+            updated.append(rec)
+            continue
+
+        if not s3_configured():
+            updated.append(rec)
+            continue
+
         raw_b64 = (item.get("data") or "").strip()
         mime_type = (item.get("mime_type") or "image/png").strip().lower()
         image_id = str(rec.get("image_id") or "").strip()
@@ -45,7 +58,7 @@ async def upload_input_images(
             image_bytes = base64.b64decode(raw_b64, validate=True)
         except Exception as exc:
             logger.warning(
-                "upload_input_images: invalid base64 session=%s image_id=%s: %s",
+                "attach_input_image_urls: invalid base64 session=%s image_id=%s: %s",
                 session_id,
                 image_id,
                 exc,
@@ -69,4 +82,7 @@ async def upload_input_images(
     return updated
 
 
-__all__ = ["upload_input_images"]
+# Backward-compatible alias
+upload_input_images = attach_input_image_urls
+
+__all__ = ["attach_input_image_urls", "upload_input_images"]

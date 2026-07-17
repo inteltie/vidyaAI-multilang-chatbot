@@ -13,8 +13,8 @@ from langchain_openai import ChatOpenAI
 
 from config import settings
 from services.agent_findings import publish
-from services.image_input import build_effective_query, validate_and_decode_images
-from services.input_image_store import upload_input_images
+from services.image_input import build_effective_query, prepare_images_for_analysis
+from services.input_image_store import attach_input_image_urls
 from services.costing import merge_patches, patch_component_usage
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class ImageAnalyzerAgent:
-    """Analyze base64 images and produce educational context for the tutor."""
+    """Analyze images (S3 URL or base64) and produce educational context for the tutor."""
 
     def __init__(self, llm: ChatOpenAI) -> None:
         self._llm = llm
@@ -34,7 +34,7 @@ class ImageAnalyzerAgent:
             return {}
 
         query = (state.get("query") or "").strip()
-        decoded = validate_and_decode_images(raw_images)
+        prepared = await prepare_images_for_analysis(raw_images)
         upload_id = uuid.uuid4().hex[:12]
         session_id = str(state.get("user_session_id") or "").strip()
 
@@ -61,7 +61,8 @@ class ImageAnalyzerAgent:
             }
         ]
         vision_detail = settings.vision_detail if settings.vision_detail in ("low", "high", "auto") else "high"
-        for item in decoded:
+        for item in prepared:
+            # Always send inline base64 to OpenAI — private S3 URLs are not fetchable by the API.
             content.append(
                 {
                     "type": "image_url",
@@ -90,10 +91,10 @@ class ImageAnalyzerAgent:
         records: List[Dict[str, Any]] = []
         now_iso = datetime.now(IST).isoformat()
 
-        for idx, item in enumerate(decoded):
+        for idx, item in enumerate(prepared):
             img_meta = per_image[idx] if idx < len(per_image) else {}
             desc = str(img_meta.get("description") or "").strip()
-            if not desc and len(decoded) == 1:
+            if not desc and len(prepared) == 1:
                 desc = str(image_context or "Image content").strip()
             if not desc:
                 desc = f"Image {idx + 1}: content could not be read clearly."
@@ -105,7 +106,7 @@ class ImageAnalyzerAgent:
                     "image_id": image_id,
                     "upload_id": upload_id,
                     "user_query": query,
-                    "url": "",
+                    "url": str(item.get("source_url") or "").strip(),
                     "descriptions": [desc],
                     "summary_line": summary,
                     "image_context": desc,
@@ -114,7 +115,7 @@ class ImageAnalyzerAgent:
             )
 
         if session_id:
-            records = await upload_input_images(session_id, decoded, records)
+            records = await attach_input_image_urls(session_id, prepared, records)
 
         effective_query = build_effective_query(query, image_context)
 
@@ -160,6 +161,6 @@ class ImageAnalyzerAgent:
                 model_name,
                 i_tokens,
                 o_tokens,
-                images_analyzed=len(decoded),
+                images_analyzed=len(prepared),
             ),
         )

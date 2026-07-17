@@ -30,13 +30,20 @@ def is_supported_image_mime(mime_type: str) -> bool:
 
 
 class ImageInput(BaseModel):
-    """Base64 image attachment for interactive chat."""
+    """Image attachment: S3/HTTPS URL (preferred) or legacy base64 data."""
 
     mime_type: str = Field(
         ...,
         description="image/jpeg, image/jpg, image/png, or image/webp",
     )
-    data: str = Field(..., description="Base64-encoded image bytes without data-URL prefix")
+    url: Optional[str] = Field(
+        None,
+        description="HTTPS/S3 URL of an image already stored (preferred over base64)",
+    )
+    data: Optional[str] = Field(
+        None,
+        description="Legacy base64-encoded image bytes without data-URL prefix",
+    )
 
     @field_validator("mime_type")
     @classmethod
@@ -50,12 +57,34 @@ class ImageInput(BaseModel):
             )
         return normalized
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return None
+        lower = cleaned.lower()
+        if not (lower.startswith("https://") or lower.startswith("http://")):
+            raise ValueError("Image url must start with http:// or https://")
+        return cleaned
+
     @field_validator("data")
     @classmethod
-    def validate_data_non_empty(cls, v: str) -> str:
-        if not (v or "").strip():
-            raise ValueError("Image data must be non-empty")
-        return v.strip()
+    def validate_data(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
+
+    @model_validator(mode="after")
+    def validate_url_or_data(self) -> "ImageInput":
+        if not self.url and not self.data:
+            raise ValueError("Each image must include either 'url' or 'data'")
+        if self.url and self.data:
+            raise ValueError("Each image must include either 'url' or 'data', not both")
+        return self
 
 
 class ImageExplorationZoneOutput(BaseModel):
@@ -181,7 +210,7 @@ class ChatRequest(BaseModel):
     )
     images: Optional[List[ImageInput]] = Field(
         default_factory=list,
-        description="Optional base64 images (interactive mode only, max 3)",
+        description="Optional images via S3/HTTPS url or legacy base64 data (max 3)",
     )
 
     @field_validator("images", mode="before")
