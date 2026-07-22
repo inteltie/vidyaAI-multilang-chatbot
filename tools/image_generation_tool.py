@@ -93,13 +93,50 @@ def _build_educational_prompt(
     )
 
 
-def _build_image_config():
+_ALL_IMAGE_SIZES = frozenset({"512", "1K", "2K", "4K"})
+# gemini-3.1-flash-image rejects 512 (API: "Image size 512 is not supported for this model").
+_GEMINI_31_FLASH_IMAGE_SIZES = frozenset({"1K", "2K", "4K"})
+
+
+def _supported_image_sizes(model: str) -> frozenset[str]:
+    """Return allowed ``image_size`` values for a Gemini image model."""
+    norm = (model or "").strip().lower()
+    if "3.1-flash-image" in norm or norm == "gemini-3.1-flash-image-preview":
+        return _GEMINI_31_FLASH_IMAGE_SIZES
+    return _ALL_IMAGE_SIZES
+
+
+def _normalize_google_image_size(model: str, raw_size: str) -> str:
+    """Map configured size to a value the target model accepts."""
+    size = (raw_size or "1K").strip().upper()
+    if size not in _ALL_IMAGE_SIZES:
+        logger.warning(
+            "Invalid GOOGLE_IMAGE_SIZE=%r; using 1K for model=%s",
+            raw_size,
+            model,
+        )
+        return "1K"
+
+    allowed = _supported_image_sizes(model)
+    if size in allowed:
+        return size
+
+    fallback = "1K" if "1K" in allowed else sorted(allowed)[0]
+    logger.warning(
+        "GOOGLE_IMAGE_SIZE=%s is not supported for model=%s; using %s",
+        size,
+        model,
+        fallback,
+    )
+    return fallback
+
+
+def _build_image_config(*, model: str = ""):
     """Build Gemini ImageConfig from settings."""
     from google.genai import types
 
-    size = (settings.google_image_size or "1K").strip().upper()
-    if size not in {"512", "1K", "2K", "4K"}:
-        size = "1K"
+    model_name = (model or settings.google_image_model or "gemini-3.1-flash-image").strip()
+    size = _normalize_google_image_size(model_name, settings.google_image_size or "1K")
     aspect = (settings.google_image_aspect_ratio or "16:9").strip()
     return types.ImageConfig(aspect_ratio=aspect, image_size=size)
 
@@ -231,7 +268,7 @@ async def _call_gemini_image(
 ) -> Any:
     from google.genai import types
 
-    image_config = _build_image_config()
+    image_config = _build_image_config(model=model)
     config = types.GenerateContentConfig(
         response_modalities=modalities,
         image_config=image_config,
@@ -320,9 +357,10 @@ class ImageGenerationTool:
             from google import genai
 
             client = genai.Client(api_key=api_key)
-            image_config = _build_image_config()
+            image_config = _build_image_config(model=model)
             logger.info(
-                "Gemini image config aspect_ratio=%s image_size=%s",
+                "Gemini image config model=%s aspect_ratio=%s image_size=%s",
+                model,
                 image_config.aspect_ratio,
                 image_config.image_size,
             )

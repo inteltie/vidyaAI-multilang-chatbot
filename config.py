@@ -136,7 +136,7 @@ class Settings(BaseModel):
     )
     google_image_size: str = Field(
         "1K",
-        description="Output resolution: 512, 1K, 2K, or 4K (Gemini 3.1 Flash Image)",
+        description="Output resolution: 1K, 2K, or 4K for gemini-3.1-flash-image (512 is auto-upgraded to 1K)",
     )
     google_image_aspect_ratio: str = Field(
         "16:9",
