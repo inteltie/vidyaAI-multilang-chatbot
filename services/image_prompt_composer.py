@@ -1,4 +1,4 @@
-"""Compose contextual, engineering-university-level image generation plans from chat state."""
+"""Compose contextual, grade-appropriate image generation plans from chat state."""
 
 from __future__ import annotations
 
@@ -22,27 +22,27 @@ _VAGUE_REQUEST = re.compile(
     re.IGNORECASE,
 )
 
-_ENGINEERING_AUDIENCE = (
-    "Audience: engineering university students (B.Tech/B.E./undergraduate engineering). "
-    "Expect technical depth: components, interfaces, materials, forces, signals, dimensions, "
-    "and domain notation where appropriate."
+_EDUCATIONAL_AUDIENCE = (
+    "Audience: school and college students across all subjects (science, mathematics, "
+    "social studies, languages, arts, commerce, etc.). "
+    "Match visual style and terminology to the topic and grade level."
 )
 
 _GRADE_STYLE: Dict[str, str] = {
     "A": (
-        "Advanced engineering (3rd–4th year); include precise component names, SI units, "
-        "control/signal arrows, and standard engineering symbols on callouts."
+        "Advanced level; use precise domain terminology, notation, and labels appropriate "
+        "to the subject (formulas, dates, anatomical terms, literary devices, etc.)."
     ),
     "B": (
-        "Core engineering undergraduate; label every major subsystem, interface, and parameter; "
-        "use correct discipline terminology (mechanical, electrical, civil, CS, etc.)."
+        "Standard secondary/college level; label every major part, step, or concept; "
+        "use correct subject vocabulary for the topic at hand."
     ),
     "C": (
-        "Early engineering undergraduate; label all visible parts with correct technical terms "
-        "and one-line functional notes where helpful."
+        "Intermediate level; label all visible elements with clear terms and brief "
+        "functional notes where helpful."
     ),
     "D": (
-        "Foundational engineering; use clear technical labels with brief glosses for specialized terms."
+        "Foundational level; use simple, accurate labels with brief glosses for specialized terms."
     ),
 }
 
@@ -243,9 +243,9 @@ def format_brief_as_prompt(brief: ImageGenerationBrief) -> str:
     lines = [
         f"Topic: {brief.topic}",
         f"Visual type: {brief.diagram_type or 'realistic_educational_illustration'}",
-        "Audience: engineering university students (technical, highly descriptive).",
-        "Render style: detailed realistic engineering illustration with labeled subsystems "
-        "(not a simple diagram or icon).",
+        "Audience: students (all subjects; match style and depth to the topic).",
+        "Render style: clear, detailed educational illustration with accurate labels "
+        "(diagram, map, timeline, process view, or realistic scene as appropriate).",
     ]
     if brief.title:
         lines.append(f"Title: {brief.title}")
@@ -337,7 +337,7 @@ def _fallback_brief(state: Dict[str, Any]) -> ImageGenerationBrief:
             f"A clear labeled process flowchart for: {topic}. "
             "Use standard flowchart symbols (start/end ovals, process rectangles, "
             "decision diamonds, arrows). Show the main steps in logical order with "
-            "readable English labels on every box. Engineering/education appropriate."
+            "readable English labels on every box. School-appropriate for any subject."
         )
         if tutor_context:
             scene = f"{scene} Lesson context: {tutor_context[:400]}"
@@ -348,18 +348,18 @@ def _fallback_brief(state: Dict[str, Any]) -> ImageGenerationBrief:
         avoid = ["photorealistic", "3D render", "clipart faces", "watermarks"]
     else:
         scene = (
-            f"A highly detailed realistic engineering illustration of {topic}. "
-            "Show all major components, interfaces, materials, and spatial relationships with "
-            "technical callout labels (SI units where relevant). Cross-section or cutaway if it "
-            "clarifies mechanism. Not a simple block diagram or icon."
+            f"A clear, detailed educational illustration of {topic}. "
+            "Show the main concepts, parts, steps, or relationships with accurate callout labels. "
+            "Choose the best visual form for the subject (labeled diagram, map, timeline, "
+            "cross-section, experiment setup, historical scene, etc.). "
+            "Not a bare icon or oversimplified clipart."
         )
         if tutor_context:
             scene = f"{scene} Context from lesson: {tutor_context[:400]}"
         diagram_type = "realistic_educational_illustration"
         style_notes = (
-            "Engineering textbook / technical manual quality; photorealistic or high-fidelity "
-            "digital render; every subsystem labeled; rich descriptive detail; "
-            "all labels spelled correctly in English."
+            "Textbook or classroom poster quality; clear labels; rich but accurate detail; "
+            "all labels spelled correctly in English; style matched to the subject domain."
         )
         avoid = ["simple diagram", "clipart", "icon-only", "watermarks"]
 
@@ -372,7 +372,7 @@ def _fallback_brief(state: Dict[str, Any]) -> ImageGenerationBrief:
         key_elements=elements,
         relationships=[],
         labels_required=[],
-        interactive_title=topic[:60] if topic else "Engineering illustration",
+        interactive_title=topic[:60] if topic else "Educational illustration",
         style_notes=style_notes,
         avoid=avoid,
         source="fallback",
@@ -472,18 +472,18 @@ class ImageGenerationPlanner:
         wants_fc = bool(state.get("wants_flowchart"))
 
         prompt = (
-            "You are Vidya, an engineering university tutor agent.\n"
+            "You are VidyaAI, an educational tutor agent for all school and college subjects.\n"
             "Read the FULL conversation before the latest line—short replies like 'yes' or "
             "'flowchart from your end' refer to the ongoing topic in prior turns.\n"
             "Think step by step:\n"
-            "1. What topic is the student studying (from the whole thread, not only the last line)?\n"
-            "2. Do they want a generated visual (flowchart vs detailed illustration), text only, or clarification?\n"
+            "1. What topic and subject is the student studying (from the whole thread, not only the last line)?\n"
+            "2. Do they want a generated visual (flowchart vs illustration/diagram), text only, or clarification?\n"
             "3. Is there enough chat context to create a useful visual?\n"
             "4. What should you tell the student, and what visual spec (if any) should be generated?\n\n"
             "Rules:\n"
             "- Never pass vague student wording verbatim as the topic.\n"
             "- ALWAYS correct spelling/grammar of the topic, title, interactive_title, labels, "
-            "and every on-image string. Use the correct scientific/engineering term even if the "
+            "and every on-image string. Use the correct subject term even if the "
             "student misspelled it (e.g. 'photosunthesis' -> 'Photosynthesis', 'mitocondria' -> "
             "'Mitochondria'). NEVER reproduce the student's typo on the image.\n"
             "- Resolve 'this/it/that' using prior tutor and student messages.\n"
@@ -491,11 +491,11 @@ class ImageGenerationPlanner:
             "(including 'generate me an image of …', 'draw a diagram of …'), you MUST use "
             "generate_diagram unless the topic is unsafe or completely non-educational.\n"
             "- Do NOT use respond_text_only or ask_clarification when they asked for an image "
-            "of a teachable engineering/science topic—build the diagram spec instead.\n"
+            "of a teachable topic—build the diagram spec instead.\n"
             "- Use ask_clarification only when the subject is unsafe, non-educational, or "
             "impossible to illustrate for school.\n"
             "- Use respond_text_only only when they did NOT ask for a generated visual.\n"
-            "- student_response must be warm, concise, and appropriate for engineering students (1-3 sentences).\n"
+            "- student_response must be warm, concise, and grade-appropriate (1-3 sentences).\n"
             "- student_response must NOT say the image is clickable, tappable, or interactive in the UI.\n"
             "- student_response must NOT say 'based on your request', 'here is a diagram I generated', "
             "or similar meta phrasing about fulfilling an image request.\n"
@@ -508,20 +508,23 @@ class ImageGenerationPlanner:
             '{ "zone": 1, "label": "...", "region_hint": "where on image", '
             '"curiosity_question": "open question about that part" }.\n'
             "- interactive_title: short banner text for the image only (e.g. key topic title)—not UI instructions.\n"
-            "- diagram_type: realistic_engineering_illustration, engineering_cutaway, "
-            "instrumentation_layout, or similar—not 'simple diagram' or 'icon'.\n"
-            "- scene_description: 4-6 sentences—engineering art-director brief: camera angle, "
-            "cutaway vs exterior, every subsystem to show, materials, forces/flows/signals, "
-            "scale cues, lighting, and what each region teaches.\n"
-            "- labels_required: at least 10 exact English callout strings (components, parameters, "
-            "interfaces); correct spelling; include units/SI where standard (e.g. MPa, V, Hz, rpm).\n"
-            "- key_elements: at least 10 concrete engineering parts (e.g. shaft, bearing, sensor, "
-            "actuator, bus, heat exchanger, reinforcement, gate, pipeline segment).\n"
-            "- relationships: at least 6 directed links (A -> B: load/flow/signal/control/data).\n"
-            "- style_notes: engineering textbook / technical manual; highly descriptive; realistic; "
-            "NOT flat schematic, clipart, or minimal block diagram.\n"
-            "- avoid must include: simple diagram, clipart, icon-only, stick figures, watermarks, "
-            "oversimplified blocks without detail.\n\n"
+            "- diagram_type: choose what fits the subject—e.g. labeled_diagram, process_flowchart, "
+            "timeline, map, anatomical_view, concept_map, historical_scene, experiment_setup, "
+            "realistic_educational_illustration—not 'simple icon' or bare clipart.\n"
+            "- scene_description: 4-6 sentences—art-director brief for THIS subject: layout, "
+            "what to show, labeling style, notation (dates, formulas, units) if relevant, "
+            "and what each region teaches.\n"
+            "- labels_required: at least 8–10 exact English callout strings; correct spelling; "
+            "use domain-appropriate notation (SI units, dates, names, symbols) when standard.\n"
+            "- key_elements: at least 8–10 concrete parts, steps, regions, or concepts to depict "
+            "(examples vary by subject: organelles, battle sites, graph axes, literary characters, "
+            "machine parts, historical figures, geometric shapes, etc.).\n"
+            "- relationships: at least 4–6 directed links (A -> B: cause/effect, flow, sequence, "
+            "comparison, dependency) as appropriate to the topic.\n"
+            "- style_notes: textbook or classroom poster quality; clear and accurate; "
+            "NOT flat clipart, icon-only, or oversimplified blocks without labels.\n"
+            "- avoid must include: clipart, icon-only, stick figures (unless topic requires), "
+            "watermarks, oversimplified blocks without detail.\n\n"
             "Return JSON only:\n"
             "{\n"
             '  "reasoning": "your step-by-step thinking",\n'
@@ -529,7 +532,7 @@ class ImageGenerationPlanner:
             '  "student_response": "what you say to the student",\n'
             '  "diagram": null or { "topic": "...", "diagram_type": "...", "scene_description": "...", ... }\n'
             "}\n\n"
-            f"{_ENGINEERING_AUDIENCE} Complexity: {grade_style}\n"
+            f"{_EDUCATIONAL_AUDIENCE} Complexity: {grade_style}\n"
             f"Subject context: {subject_hint}\n"
             f"Session topic hint: {session_topic or 'none'}\n"
             f"Context resolver says visual_output={wants_visual} flowchart={wants_fc}\n"

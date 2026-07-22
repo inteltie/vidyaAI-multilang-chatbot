@@ -192,8 +192,8 @@ class ImageGenerationAgent:
             )
             response = (
                 "I couldn't render the illustration this time—the image service returned no picture. "
-                "Please try again in a moment, or rephrase with the engineering topic you want labeled "
-                f"(e.g. a cutaway of {plan.brief.topic[:60]})."
+                "Please try again in a moment, or rephrase with the topic you want illustrated "
+                f"(e.g. a labeled diagram of {plan.brief.topic[:60]})."
             )
         else:
             response = enrich_student_response_for_exploration(
